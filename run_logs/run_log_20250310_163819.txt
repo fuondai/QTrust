@@ -1,0 +1,15 @@
+Command: c:\users\dadad\appdata\local\programs\python\python310\python.exe -m dqn_blockchain_sim.run_advanced_simulation --num_shards 2 --steps 2 --tx_per_step 1 --save_stats
+Thời gian: 2025-03-10 16:38:19
+
+Traceback (most recent call last):
+  File "c:\users\dadad\appdata\local\programs\python\python310\lib\runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "c:\users\dadad\appdata\local\programs\python\python310\lib\runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\run_advanced_simulation.py", line 9, in <module>
+    from dqn_blockchain_sim.simulation.advanced_simulation import AdvancedSimulation
+  File "C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\simulation\advanced_simulation.py", line 19, in <module>
+    from dqn_blockchain_sim.utils.real_data_builder import RealDataBuilder
+ImportError: cannot import name 'RealDataBuilder' from 'dqn_blockchain_sim.utils.real_data_builder' (C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\utils\real_data_builder.py)
+
+Exit code: 1

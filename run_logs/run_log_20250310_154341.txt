@@ -1,0 +1,27 @@
+Starting simulation with 4 shards, running for 5 steps
+Transactions per step: 2
+Using real data: False
+Using DQN agent: True
+
+Mô ph\u1ecfng:   0%|          | 0/5 [00:00<?, ?it/s]
+Mô ph\u1ecfng:  20%|##        | 1/5 [00:00<00:00, 491.48it/s]
+Traceback (most recent call last):
+  File "c:\users\dadad\appdata\local\programs\python\python310\lib\runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "c:\users\dadad\appdata\local\programs\python\python310\lib\runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\run_advanced_simulation.py", line 132, in <module>
+    sys.exit(main()) 
+  File "C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\run_advanced_simulation.py", line 74, in main
+    results = simulation.run_simulation(
+  File "C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\simulation\advanced_simulation.py", line 542, in run_simulation
+    step_stats = self.step()
+  File "C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\simulation\advanced_simulation.py", line 473, in step
+    self._update_network_state()
+  File "C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\simulation\advanced_simulation.py", line 188, in _update_network_state
+    self.htdcm.update_trust_scores()
+  File "C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\simulation\htdcm_integration.py", line 100, in update_trust_scores
+    network_data = self._collect_network_data()
+  File "C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\simulation\htdcm_integration.py", line 145, in _collect_network_data
+    failed = sum(failed.values()) if failed else 0
+TypeError: unsupported operand type(s) for +: 'int' and 'Transaction'

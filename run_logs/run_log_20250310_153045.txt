@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "c:\users\dadad\appdata\local\programs\python\python310\lib\runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "c:\users\dadad\appdata\local\programs\python\python310\lib\runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\run_advanced_simulation.py", line 132, in <module>
+    sys.exit(main()) 
+  File "C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\run_advanced_simulation.py", line 58, in main
+    print(f"B\u1eaft \u0111\u1ea7u mô ph\u1ecfng v\u1edbi {args.num_shards} shard, ch\u1ea1y trong {args.steps} b\u01b0\u1edbc")
+  File "c:\users\dadad\appdata\local\programs\python\python310\lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+UnicodeEncodeError: 'charmap' codec can't encode character '\u1eaf' in position 1: character maps to <undefined>

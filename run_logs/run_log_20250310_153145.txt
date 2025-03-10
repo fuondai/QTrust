@@ -1,0 +1,18 @@
+Traceback (most recent call last):
+  File "c:\users\dadad\appdata\local\programs\python\python310\lib\runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "c:\users\dadad\appdata\local\programs\python\python310\lib\runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\run_advanced_simulation.py", line 132, in <module>
+    sys.exit(main()) 
+  File "C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\run_advanced_simulation.py", line 64, in main
+    simulation = AdvancedSimulation(
+  File "C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\simulation\advanced_simulation.py", line 109, in __init__
+    self.reset()
+  File "C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\simulation\advanced_simulation.py", line 128, in reset
+    agent.reset()
+AttributeError: 'ShardDQNAgent' object has no attribute 'reset'
+Starting simulation with 4 shards, running for 5 steps
+Transactions per step: 2
+Using real data: False
+Using DQN agent: True

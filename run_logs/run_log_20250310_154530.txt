@@ -1,0 +1,42 @@
+Starting simulation with 4 shards, running for 5 steps
+Transactions per step: 2
+Using real data: False
+Using DQN agent: True
+
+Mô ph\u1ecfng:   0%|          | 0/5 [00:00<?, ?it/s]
+Mô ph\u1ecfng: 100%|##########| 5/5 [00:00<00:00, 535.32it/s]
+Da luu thong ke tong hop vao logs\summary_stats_1741596337.json
+Da luu lich su metrics vao logs\metrics_history_1741596337.json
+
+===== SIMULATION RESULTS =====
+Total transactions: 10
+Successful transactions: 2
+Success rate: 20.00%
+
+--- AVERAGE PERFORMANCE ---
+Throughput: 0.10 transactions/step
+Latency: 50.50 ms
+Congestion level: 0.20%
+Energy consumption: 0.00 units
+
+=== MODULE STATISTICS ===
+
+MAD-RAPID Protocol:
+- Total cross-shard transactions: 0
+- Optimized transactions: 0
+- Latency improvement: 0.00%
+- Energy saved: 0.00 units
+
+HTDCM:
+- Average trust score: 0.43
+- Trust violations detected: 0
+- High security transactions: 0
+- Medium security transactions: 0
+- Low security transactions: 0
+
+ACSC:
+- Total transactions: 0
+- Fast Consensus usage: 0.00%
+- Standard Consensus usage: 0.00%
+- Robust Consensus usage: 0.00%
+- Consensus success rate: 100.00%
