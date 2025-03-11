@@ -1,0 +1,13 @@
+name,num_shards,tx_per_step,use_dqn,use_advanced,consensus_type,throughput,latency,success_rate,congestion,energy_consumption
+shard_comparison_4,4,20,True,True,adaptive,0,0,0,0,0
+shard_comparison_8,8,20,True,True,adaptive,0,0,0,0,0
+shard_comparison_16,16,20,True,True,adaptive,0,0,0,0,0
+shard_comparison_32,32,20,True,True,adaptive,0,0,0,0,0
+dqn_comparison_with,8,20,True,True,adaptive,0,0,0,0,0
+dqn_comparison_without,8,20,False,True,adaptive,0,0,0,0,0
+consensus_comparison_standard,8,20,True,True,standard,0,0,0,0,0
+consensus_comparison_adaptive,8,20,True,True,adaptive,0,0,0,0,0
+load_comparison_10,8,10,True,True,adaptive,0,0,0,0,0
+load_comparison_20,8,20,True,True,adaptive,0,0,0,0,0
+load_comparison_50,8,50,True,True,adaptive,0,0,0,0,0
+load_comparison_100,8,100,True,True,adaptive,0,0,0,0,0

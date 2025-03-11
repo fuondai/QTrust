@@ -1,0 +1,10 @@
+c:\users\dadad\appdata\local\programs\python\python310\python.exe -m pip install -r requirements.txt
+c:\users\dadad\appdata\local\programs\python\python310\python.exe -m dqn_blockchain_sim.simulation.main
+c:\users\dadad\appdata\local\programs\python\python310\python.exe -m dqn_blockchain_sim.run_advanced_simulation --num_shards 4 --steps 10 --tx_per_step 5
+c:\users\dadad\appdata\local\programs\python\python310\python.exe -m dqn_blockchain_sim.run_advanced_simulation --num_shards 4 --steps 10 --tx_per_step 5 --visualize
+c:\users\dadad\appdata\local\programs\python\python310\python.exe -m dqn_blockchain_sim.run_advanced_simulation --num_shards 4 --steps 10 --tx_per_step 5 --save_stats
+c:\users\dadad\appdata\local\programs\python\python310\python.exe -m dqn_blockchain_sim.experiments.consensus_comparison
+c:\users\dadad\appdata\local\programs\python\python310\python.exe -m dqn_blockchain_sim.experiments.performance_analysis
+c:\users\dadad\appdata\local\programs\python\python310\python.exe -m dqn_blockchain_sim.experiments.generate_report
+c:\users\dadad\appdata\local\programs\python\python310\python.exe -m dqn_blockchain_sim.run_analysis
+c:\users\dadad\appdata\local\programs\python\python310\python.exe -m dqn_blockchain_sim.run_analysis_gui

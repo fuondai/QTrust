@@ -341,36 +341,32 @@ class ShardDQNAgent:
     def update(self, state: np.ndarray, action: int, reward: float, 
               next_state: np.ndarray, done: bool) -> float:
         """
-        Cập nhật tác tử với trải nghiệm mới và tối ưu hóa mô hình
+        Cập nhật agent với trải nghiệm mới
         
         Args:
             state: Trạng thái hiện tại
             action: Hành động đã thực hiện
             reward: Phần thưởng nhận được
             next_state: Trạng thái tiếp theo
-            done: Cờ đánh dấu kết thúc
+            done: Trạng thái kết thúc
             
         Returns:
-            Giá trị mất mát sau khi tối ưu hóa
+            Giá trị loss của lần cập nhật này
         """
         # Thêm trải nghiệm vào bộ nhớ
         self.add_experience(state, action, reward, next_state, done)
         
-        # Tối ưu hóa mô hình nếu có đủ mẫu
-        loss = 0.0
-        if len(self.memory) >= self.config['batch_size']:
-            loss = self.optimize_model(self.config['batch_size'])
-            
-            # Cập nhật epsilon
-            self.update_epsilon()
-            
-            # Cập nhật mạng mục tiêu nếu cần
-            if self.steps_done % self.config['target_update'] == 0:
-                self.update_target_network()
-                
-        # Tăng bước
-        self.steps_done += 1
+        # Cập nhật epsilon
+        self.update_epsilon()
         
+        # Tối ưu hóa mô hình
+        loss = self.optimize_model(self.config['batch_size'])
+        
+        # Cập nhật mạng mục tiêu
+        self.steps_done += 1
+        if self.steps_done % self.config['target_update_freq'] == 0:
+            self.update_target_network()
+            
         return loss
         
     def get_model_parameters(self) -> Dict[str, torch.Tensor]:

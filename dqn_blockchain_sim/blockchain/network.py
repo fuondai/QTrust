@@ -8,11 +8,157 @@ import random
 import networkx as nx
 import numpy as np
 from typing import Dict, List, Optional, Set, Tuple, Any
+from collections import defaultdict
 
 from dqn_blockchain_sim.blockchain.shard import Shard
 from dqn_blockchain_sim.blockchain.transaction import Transaction, TransactionStatus
 from dqn_blockchain_sim.configs.simulation_config import BLOCKCHAIN_CONFIG
 
+
+class Shard:
+    """
+    Đại diện cho một shard trong mạng blockchain
+    """
+    
+    def __init__(self, shard_id: int, config: Dict[str, Any] = None):
+        """
+        Khởi tạo một shard
+        
+        Args:
+            shard_id: ID của shard
+            config: Cấu hình cho shard
+        """
+        self.shard_id = shard_id
+        self.config = config if config else {}
+        
+        # Trạng thái shard
+        self.transaction_queue = []
+        self.processed_transactions = {}
+        self.failed_transactions = {}
+        self.cross_shard_queue = []
+        
+        # Danh sách các nút trong shard
+        self.nodes = set()
+        self.node_stats = {}
+        
+        # Metrics
+        self.throughput = 0.0
+        self.avg_latency = 50.0
+        self.congestion_level = 0.0
+        self.energy_consumption = 0.0
+        
+        # Thống kê
+        self.confirmed_count = 0
+        self.rejected_count = 0
+        self.total_gas_used = 0
+        self.total_fees = 0.0
+        
+    def add_node(self, node_name: str) -> bool:
+        """
+        Thêm một nút vào shard
+        
+        Args:
+            node_name: Tên/ID của nút
+            
+        Returns:
+            True nếu thêm thành công, False nếu nút đã tồn tại
+        """
+        if node_name in self.nodes:
+            return False
+            
+        self.nodes.add(node_name)
+        self.node_stats[node_name] = {
+            'transactions_processed': 0,
+            'transactions_failed': 0,
+            'avg_latency': 50.0,
+            'energy_consumption': 0.0,
+            'uptime': time.time(),
+            'last_active': time.time()
+        }
+        return True
+        
+    def remove_node(self, node_name: str) -> bool:
+        """
+        Xóa một nút khỏi shard
+        
+        Args:
+            node_name: Tên/ID của nút
+            
+        Returns:
+            True nếu xóa thành công, False nếu không tìm thấy nút
+        """
+        if node_name not in self.nodes:
+            return False
+            
+        self.nodes.remove(node_name)
+        if node_name in self.node_stats:
+            del self.node_stats[node_name]
+        return True
+        
+    def process_transaction(self, transaction: Dict[str, Any]) -> bool:
+        """
+        Xử lý một giao dịch
+        
+        Args:
+            transaction: Giao dịch cần xử lý
+            
+        Returns:
+            True nếu xử lý thành công, False nếu thất bại
+        """
+        tx_id = transaction['id']
+        start_time = time.time()
+        
+        # Kiểm tra tắc nghẽn
+        self.congestion_level = len(self.transaction_queue) / 1000  # Chuẩn hóa
+        
+        # Xử lý giao dịch xuyên shard
+        if transaction.get('is_cross_shard'):
+            self.cross_shard_queue.append(transaction)
+            return True
+            
+        # Mô phỏng xử lý
+        success = random.random() > (0.1 + 0.2 * self.congestion_level)  # Tỷ lệ thất bại tăng theo tắc nghẽn
+        
+        if success:
+            self.processed_transactions[tx_id] = transaction
+            self.confirmed_count += 1
+            
+            # Cập nhật thống kê
+            if transaction['type'] == 'smart_contract':
+                self.total_gas_used += transaction['gas_limit']
+            self.total_fees += transaction['fee']
+        else:
+            self.failed_transactions[tx_id] = transaction
+            self.rejected_count += 1
+            
+        # Cập nhật metrics
+        process_time = time.time() - start_time
+        self.avg_latency = 0.9 * self.avg_latency + 0.1 * process_time * 1000  # ms
+        self.throughput = self.confirmed_count / max(1, time.time() - start_time)
+        
+        return success
+        
+    def get_statistics(self) -> Dict[str, Any]:
+        """
+        Lấy thống kê của shard
+        
+        Returns:
+            Từ điển chứa các thống kê
+        """
+        return {
+            'shard_id': self.shard_id,
+            'queue_size': len(self.transaction_queue),
+            'cross_shard_queue_size': len(self.cross_shard_queue),
+            'processed_count': len(self.processed_transactions),
+            'failed_count': len(self.failed_transactions),
+            'confirmed_count': self.confirmed_count,
+            'rejected_count': self.rejected_count,
+            'throughput': self.throughput,
+            'avg_latency': self.avg_latency,
+            'congestion_level': self.congestion_level,
+            'total_gas_used': self.total_gas_used,
+            'total_fees': self.total_fees
+        }
 
 class BlockchainNetwork:
     """
@@ -51,7 +197,7 @@ class BlockchainNetwork:
         """
         # Tạo các shard
         for i in range(self.config["num_shards"]):
-            self.shards[i] = Shard(i, self, self.config["min_nodes_per_shard"], self.config["block_time"])
+            self.shards[i] = Shard(i, self.config)
             self.shard_graph.add_node(i)
         
         # Kết nối các shard

@@ -79,10 +79,13 @@ def run_benchmark(config: Dict[str, Any], output_dir: str = "benchmark_results")
     }
 
 
-def run_comparative_benchmarks() -> List[Dict[str, Any]]:
+def run_comparative_benchmarks(num_configs: int = 3) -> List[Dict[str, Any]]:
     """
     Chạy các thử nghiệm so sánh giữa các phương pháp khác nhau
     
+    Args:
+        num_configs: Số lượng cấu hình cần chạy (mặc định là 3)
+        
     Returns:
         Danh sách kết quả thử nghiệm
     """

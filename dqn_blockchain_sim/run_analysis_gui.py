@@ -12,14 +12,21 @@ from datetime import datetime
 import subprocess
 
 # Thêm thư mục gốc vào đường dẫn
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+PYTHON_PATH = r"C:\Users\dadad\AppData\Local\Programs\Python\Python310\python.exe"
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.append(parent_dir)
+
+# Cấu hình matplotlib để không sử dụng interactive mode
+import matplotlib
+matplotlib.use('Agg')
 
 # Nhập các module phân tích
 try:
-    from dqn_blockchain_sim.experiments.benchmark_runner import run_comparative_benchmarks, analyze_results
-    from dqn_blockchain_sim.experiments.consensus_comparison import ConsensusSimulator
-    from dqn_blockchain_sim.experiments.performance_analysis import PerformanceAnalyzer
-    from dqn_blockchain_sim.experiments.generate_report import ReportGenerator
+    from experiments.benchmark_runner import run_comparative_benchmarks, analyze_results
+    from experiments.consensus_comparison import ConsensusSimulator
+    from experiments.performance_analysis import PerformanceAnalyzer
+    from experiments.generate_report import ReportGenerator
     
     IMPORT_ERROR = None
 except ImportError as e:
@@ -30,18 +37,33 @@ class RedirectText:
     """Lớp chuyển hướng đầu ra sang widget Text"""
     
     def __init__(self, text_widget):
+        """Khởi tạo đối tượng chuyển hướng đầu ra
+        
+        Args:
+            text_widget: Widget Text để hiển thị đầu ra
+        """
         self.text_widget = text_widget
-        self.buffer = ""
+        self.buffer = []
         
     def write(self, string):
-        self.buffer += string
-        self.text_widget.configure(state="normal")
-        self.text_widget.insert(tk.END, string)
-        self.text_widget.see(tk.END)
-        self.text_widget.configure(state="disabled")
+        """Ghi chuỗi vào widget
+        
+        Args:
+            string: Chuỗi cần ghi
+        """
+        self.buffer.append(string)
+        # Chỉ cập nhật giao diện sau mỗi dòng hoàn chỉnh
+        if string.endswith('\n'):
+            self.flush()
         
     def flush(self):
-        pass
+        """Đẩy buffer ra widget"""
+        if self.buffer:
+            msg = ''.join(self.buffer)
+            self.text_widget.insert(tk.END, msg)
+            self.text_widget.see(tk.END)
+            self.text_widget.update()
+            self.buffer = []
 
 
 class AnalysisGUI:
@@ -340,7 +362,7 @@ class AnalysisGUI:
                 self.log("="*50)
                 
                 # Chạy benchmark
-                benchmarks = run_comparative_benchmarks(num_configs=config["num_configs"])
+                benchmarks = run_comparative_benchmarks()
                 analyze_results(benchmarks, output_dir=benchmark_dir)
                 
                 self.log("Benchmarks hoàn thành.")

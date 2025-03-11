@@ -266,6 +266,7 @@ class MADRAPIDProtocol:
         self.num_shards = num_shards
         self.prediction_horizon = prediction_horizon
         self.embedding_dim = embedding_dim
+        self.max_history_len = 100  # Thêm thuộc tính này
         
         # Khởi tạo trạng thái của các shard
         self.shard_states = {i: {'congestion': 0.0, 'latency': 10.0} for i in range(num_shards)}
@@ -306,67 +307,78 @@ class MADRAPIDProtocol:
         
     def _initialize_shard_embeddings(self) -> None:
         """
-        Khởi tạo vector biểu diễn ban đầu cho các shard
+        Khởi tạo vector biểu diễn cho các shard
         """
-        num_shards = len(self.network.shards)
-        
-        # Tạo ma trận kết nối shard
-        self.latency_matrix = np.zeros((num_shards, num_shards))
-        
-        # Lấy thông tin độ trễ từ shard_graph
-        for i, j, data in self.network.shard_graph.edges(data=True):
-            self.latency_matrix[i, j] = data.get('latency', 100)  # Giá trị mặc định 100ms
-            self.latency_matrix[j, i] = data.get('latency', 100)  # Kết nối hai chiều
-            
-        # Khởi tạo vector biểu diễn shard
         for shard_id, shard in self.network.shards.items():
-            # Vector biểu diễn ban đầu dựa trên thuộc tính shard
-            initial_features = np.array([
-                shard_id / num_shards,  # ID được chuẩn hóa
-                len(shard.nodes) / 100,  # Số lượng nút (chuẩn hóa)
+            # Tính toán các đặc trưng của shard
+            features = [
+                len(shard.transaction_queue) / 1000,  # Kích thước queue
+                shard.avg_latency / 100,  # Độ trễ trung bình
                 shard.congestion_level,  # Mức độ tắc nghẽn
-                shard.avg_latency / 1000 if hasattr(shard, 'avg_latency') else 0.1,  # Độ trễ trung bình
-                len(shard.transaction_pool) / 1000,  # Kích thước pool
-                len(self.network.shard_graph.edges(shard_id)) / num_shards,  # Số lượng kết nối
-                random.random() * 0.1  # Nhiễu ngẫu nhiên để tạo sự khác biệt
-            ])
+                len(shard.nodes) / 100,  # Số lượng nút
+                shard.throughput / 100,  # Thông lượng
+                len(shard.cross_shard_queue) / 100,  # Số giao dịch xuyên shard
+                shard.total_gas_used / 1e6,  # Tổng gas đã sử dụng
+                shard.total_fees / 1000  # Tổng phí giao dịch
+            ]
+            
+            # Chuẩn hóa đặc trưng
+            features = np.array(features, dtype=np.float32)
+            features = (features - np.mean(features)) / (np.std(features) + 1e-8)
             
             # Mở rộng vector lên kích thước embedding_dim
             padded_features = np.pad(
-                initial_features,
-                (0, self.embedding_dim - len(initial_features)),
-                'constant'
+                features,
+                (0, self.embedding_dim - len(features)),
+                'constant',
+                constant_values=0
             )
             
-            # Lưu trữ vector biểu diễn
+            # Chuyển đổi thành tensor
             self.shard_embeddings[shard_id] = torch.FloatTensor(padded_features)
+            
+            # Khởi tạo lịch sử đặc trưng
+            self.feature_history[shard_id] = []
             
     def update_feature_history(self) -> None:
         """
-        Cập nhật lịch sử đặc trưng cho mỗi shard
+        Cập nhật lịch sử đặc trưng của các shard
         """
-        current_time = time.time()
-        
         for shard_id, shard in self.network.shards.items():
-            # Thu thập đặc trưng của shard
-            features = np.array([
-                shard.congestion_level,
-                len(shard.transaction_pool) / 1000,
-                len(shard.cross_shard_queue) / 100,
-                shard.avg_latency / 1000 if hasattr(shard, 'avg_latency') else 0.1,
-                shard.total_transactions / 10000 if hasattr(shard, 'total_transactions') else 0.1,
-                shard.confirmed_transactions / 10000 if hasattr(shard, 'confirmed_transactions') else 0.1,
-                shard.energy_consumption / 10 if hasattr(shard, 'energy_consumption') else 0.1,
-                current_time % 86400 / 86400  # Thời gian trong ngày (chuẩn hóa)
-            ])
+            # Tính toán đặc trưng mới
+            features = [
+                len(shard.transaction_queue) / 1000,  # Kích thước queue
+                shard.avg_latency / 100,  # Độ trễ trung bình
+                shard.congestion_level,  # Mức độ tắc nghẽn
+                len(shard.nodes) / 100,  # Số lượng nút
+                shard.throughput / 100,  # Thông lượng
+                len(shard.cross_shard_queue) / 100,  # Số giao dịch xuyên shard
+                shard.total_gas_used / 1e6,  # Tổng gas đã sử dụng
+                shard.total_fees / 1000  # Tổng phí giao dịch
+            ]
+            
+            # Chuẩn hóa đặc trưng
+            features = np.array(features, dtype=np.float32)
+            features = (features - np.mean(features)) / (np.std(features) + 1e-8)
+            
+            # Mở rộng vector lên kích thước embedding_dim
+            padded_features = np.pad(
+                features,
+                (0, self.embedding_dim - len(features)),
+                'constant',
+                constant_values=0
+            )
             
             # Thêm vào lịch sử
-            self.feature_history[shard_id].append(features)
+            self.feature_history[shard_id].append(padded_features)
             
             # Giới hạn kích thước lịch sử
-            if len(self.feature_history[shard_id]) > self.max_history_len:
-                self.feature_history[shard_id] = self.feature_history[shard_id][-self.max_history_len:]
-                
+            if len(self.feature_history[shard_id]) > self.prediction_horizon:
+                self.feature_history[shard_id].pop(0)
+            
+            # Cập nhật vector biểu diễn shard
+            self.shard_embeddings[shard_id] = torch.FloatTensor(padded_features)
+
     def predict_congestion(self, shard_id: int) -> float:
         """
         Dự đoán mức độ tắc nghẽn trong tương lai cho một shard
@@ -570,3 +582,27 @@ class MADRAPIDProtocol:
                 current_shard_id = next_shard_id
                 
         return True 
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """
+        Lấy thống kê về hiệu suất của giao thức
+        
+        Returns:
+            Từ điển chứa các thống kê
+        """
+        stats = {
+            'total_transactions': self.performance_stats['total_transactions'],
+            'optimized_transactions': self.performance_stats['optimized_transactions'],
+            'latency_improvement': self.performance_stats['latency_improvement'],
+            'energy_saved': self.performance_stats['energy_saved'],
+            'shard_congestion': {
+                shard_id: state['congestion']
+                for shard_id, state in self.shard_states.items()
+            },
+            'shard_latency': {
+                shard_id: state['latency']
+                for shard_id, state in self.shard_states.items()
+            }
+        }
+        
+        return stats 

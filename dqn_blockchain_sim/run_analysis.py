@@ -39,11 +39,8 @@ def run_benchmarks(args):
     print("Chạy benchmarks...")
     print("="*50)
     
-    # Tham số benchmark
-    num_configs = args.num_configs if hasattr(args, 'num_configs') else 3
-    
     # Chạy benchmark
-    benchmarks = run_comparative_benchmarks(num_configs=num_configs)
+    benchmarks = run_comparative_benchmarks()
     analyze_results(benchmarks, output_dir="benchmark_results")
     
     print("Benchmarks hoàn thành.")

@@ -1,0 +1,78 @@
+{
+  "simulation_config": {
+    "num_shards": 4,
+    "use_real_data": false,
+    "use_dqn": true,
+    "steps": 100,
+    "transactions_per_step": 20
+  },
+  "transaction_stats": {
+    "total_transactions": 2000,
+    "successful_transactions": 971,
+    "success_rate": 0.4855
+  },
+  "performance_metrics": {
+    "avg_throughput": 2.4025,
+    "max_throughput": 4.0,
+    "min_throughput": 0.0,
+    "avg_latency": 276.025,
+    "max_latency": 300.0,
+    "min_latency": 62.5,
+    "avg_energy_consumption": 0.0,
+    "max_energy_consumption": 0,
+    "min_energy_consumption": 0,
+    "avg_success_rate": 0.4766779240653245,
+    "max_success_rate": 0.512,
+    "min_success_rate": 0.44,
+    "avg_congestion": 0.9041,
+    "max_congestion": 1.0,
+    "min_congestion": 0.05
+  },
+  "module_stats": {
+    "mad_rapid": {
+      "total_transactions": 0,
+      "optimized_transactions": 0,
+      "latency_improvement": 0.0,
+      "energy_saved": 0.0,
+      "shard_congestion": {
+        "0": 0.0,
+        "1": 0.0,
+        "2": 0.0,
+        "3": 0.0
+      },
+      "shard_latency": {
+        "0": 10.0,
+        "1": 10.0,
+        "2": 10.0,
+        "3": 10.0
+      }
+    },
+    "trust_manager": {
+      "num_nodes": 0,
+      "avg_trust_score": 0.0,
+      "min_trust_score": 0,
+      "max_trust_score": 0,
+      "suspicious_nodes": 0,
+      "selections_made": 0,
+      "last_selection": null
+    },
+    "acsc": {
+      "total_transactions": 971,
+      "successful_transactions": 0,
+      "success_rate": 0.0,
+      "total_energy": 26217.0,
+      "avg_energy_per_tx": 27.0,
+      "avg_latency": 5003.910001730663,
+      "strategy_usage": {
+        "high_trust": 0,
+        "medium_trust": 0,
+        "low_trust": 971
+      },
+      "strategy_percentages": {
+        "high_trust": 0.0,
+        "medium_trust": 0.0,
+        "low_trust": 1.0
+      }
+    }
+  }
+}

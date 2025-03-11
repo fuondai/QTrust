@@ -553,3 +553,88 @@ class TrustManager:
             }
         
         return network_data
+
+    def get_shard_trust_score(self, shard_id):
+        """
+        Lấy điểm tin cậy của một shard cụ thể
+        
+        Args:
+            shard_id: ID của shard cần lấy điểm tin cậy
+            
+        Returns:
+            Điểm tin cậy của shard, hoặc 0.5 nếu không tìm thấy
+        """
+        return self.trust_scores.get(shard_id, 0.5)
+
+    def _apply_dqn_actions(self, 
+                        node_metrics: Dict[str, Dict[str, Any]], 
+                        steps: int = 10) -> Dict[str, List[float]]:
+        """
+        Mô phỏng sự tiến hóa điểm tin cậy qua thời gian
+        
+        Args:
+            node_metrics: Từ điển ánh xạ từ node_id đến metrics cho mỗi bước
+            steps: Số bước mô phỏng
+            
+        Returns:
+            Từ điển ánh xạ từ node_id đến danh sách điểm tin cậy qua các bước
+        """
+        # Sao chép trạng thái hiện tại để tránh ảnh hưởng
+        original_scores = self.trust_scores.copy()
+        original_last_update = self.last_update_time.copy()
+        
+        # Lưu trữ kết quả mô phỏng
+        evolution = defaultdict(list)
+        
+        for step in range(steps):
+            for node_id, metrics in node_metrics.items():
+                if node_id in self.nodes:
+                    # Thêm nhiễu ngẫu nhiên vào các chỉ số
+                    noisy_metrics = {}
+                    for k, v in metrics.items():
+                        if isinstance(v, (int, float)):
+                            noise = np.random.normal(0, 0.05)  # 5% nhiễu
+                            noisy_metrics[k] = max(0, v + noise * v)
+                        else:
+                            noisy_metrics[k] = v
+                            
+                    # Cập nhật điểm tin cậy với chỉ số có nhiễu
+                    score = self.update_node_metrics(node_id, noisy_metrics)
+                    evolution[node_id].append(score)
+                    
+        # Khôi phục trạng thái ban đầu
+        self.trust_scores = original_scores
+        self.last_update_time = original_last_update
+        
+        return dict(evolution)
+
+    def update_trust_scores(self):
+        """
+        Cập nhật điểm tin cậy cho tất cả các nút dựa trên dữ liệu mạng hiện tại
+        """
+        # Thu thập dữ liệu mạng
+        network_data = self._collect_network_data()
+        
+        # Cập nhật điểm tin cậy cho từng nút
+        for node_id, node_info in self.nodes.items():
+            # Tạo metrics từ dữ liệu mạng
+            metrics = {
+                "uptime": node_info.get("uptime", 1.0),
+                "performance": node_info.get("compute_power", 0.5),
+                "security_incidents": 0,
+                "energy_efficiency": node_info.get("energy_efficiency", 0.7)
+            }
+            
+            # Cập nhật điểm tin cậy
+            self.update_node_metrics(node_id, metrics)
+        
+        # Cập nhật điểm tin cậy cho các shard
+        if self.network and hasattr(self.network, 'shards'):
+            for shard_id in self.network.shards:
+                # Tính điểm tin cậy trung bình của các nút trong shard
+                shard_nodes = [n for n, info in self.nodes.items() 
+                              if info.get('shard_id') == shard_id]
+                
+                if shard_nodes:
+                    avg_score = sum(self.trust_scores.get(n, 0.5) for n in shard_nodes) / len(shard_nodes)
+                    self.trust_scores[shard_id] = avg_score

@@ -1,0 +1,7 @@
+{
+  "consensus_protocol": "PBFT",
+  "num_shards": 4,
+  "nodes_per_shard": 10,
+  "num_transactions": 1000,
+  "simulation_steps": 100
+}

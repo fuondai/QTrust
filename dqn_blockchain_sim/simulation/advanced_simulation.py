@@ -72,10 +72,15 @@ class AdvancedSimulation:
         
         # Khởi tạo các module tích hợp
         # 1. HTDCM - Hierarchical Trust-based Data Center Mechanism
-        self.htdcm = TrustManager(num_shards=num_shards, network=self.network)
+        self.trust_manager = TrustManager(num_shards=num_shards, network=self.network)
         
         # 2. ACSC - Adaptive Cross-Shard Consensus
-        self.acsc = AdaptiveCrossShardConsensus(network=self.network, trust_manager=self.htdcm)
+        # Initialize HTDCM (Hierarchical Trust-based Data Center Mechanism)
+        self.htdcm = TrustManager(network=self.network, num_shards=num_shards)
+        
+        # Initialize the adaptive cross-shard consensus mechanism
+        # Fix: Remove the 'network' parameter if it's not expected
+        self.acsc = AdaptiveCrossShardConsensus(trust_manager=self.trust_manager)
         
         # 3. MAD-RAPID - Multi-Agent Dynamic RAPID Protocol
         self.mad_rapid = MADRAPIDProtocol(num_shards=num_shards, network=self.network)
@@ -113,12 +118,12 @@ class AdvancedSimulation:
         self.network.reset()
         
         # Đặt lại các module tích hợp
-        if hasattr(self.htdcm, 'reset_statistics'):
-            self.htdcm.reset_statistics()
+        if hasattr(self.trust_manager, 'reset_statistics'):
+            self.trust_manager.reset_statistics()
         else:
             # Khởi tạo lại các thuộc tính thống kê
-            self.htdcm.trust_scores = {i: 0.5 for i in range(self.num_shards)}
-            self.htdcm.reputation_history = {}
+            self.trust_manager.trust_scores = {i: 0.5 for i in range(self.num_shards)}
+            self.trust_manager.reputation_history = {}
         
         if hasattr(self.acsc, 'reset_statistics'):
             self.acsc.reset_statistics()
@@ -209,7 +214,7 @@ class AdvancedSimulation:
         Cập nhật trạng thái mạng sau mỗi bước
         """
         # Cập nhật điểm tin cậy
-        self.htdcm.update_trust_scores()
+        self.trust_manager.update_trust_scores()
         
         # Cập nhật lịch sử đặc trưng của MAD-RAPID
         self.mad_rapid.update_feature_history()
@@ -255,7 +260,7 @@ class AdvancedSimulation:
                 len(getattr(shard, 'transaction_queue', [])) / 100,  # Kích thước hàng đợi thường (chuẩn hóa)
                 len(getattr(shard, 'cross_shard_queue', [])) / 50,   # Kích thước hàng đợi xuyên mảnh (chuẩn hóa)
                 getattr(shard, 'throughput', 0) / 50,                # Thông lượng (chuẩn hóa)
-                self.htdcm.get_shard_trust_score(shard_id),          # Điểm tin cậy
+                self.trust_manager.get_shard_trust_score(shard_id),          # Điểm tin cậy
                 getattr(shard, 'avg_latency', 50) / 200,             # Độ trễ trung bình (chuẩn hóa)
                 shard_id / self.num_shards                           # ID shard (chuẩn hóa)
             ]
@@ -341,7 +346,7 @@ class AdvancedSimulation:
                     shard.rejected_transactions = 0
                 shard.rejected_transactions += 1
     
-    def _process_cross_shard_transactions(self, shard, boost_factor=1.0):
+    def _process_cross_shard_transactions(self, shard, boost_factor=1.5):
         """
         Xử lý giao dịch xuyên mảnh trong shard
         
@@ -370,7 +375,13 @@ class AdvancedSimulation:
                 tx = shard.cross_shard_queue.pop(0)
                 
                 # Xử lý qua ACSC nếu có
-                success = self.acsc.process_cross_shard_transaction(tx)
+                # Sửa lỗi: Truyền đầy đủ các tham số cần thiết
+                success = self.acsc.process_cross_shard_transaction(
+                    tx,
+                    source_shard_id=tx.source_shard,  # Thêm source_shard_id
+                    target_shard_id=tx.target_shard,  # Thêm target_shard_id
+                    network=self.network              # Thêm network
+                )
                 
                 if success:
                     # Giao dịch thành công
@@ -448,8 +459,10 @@ class AdvancedSimulation:
             success_rate = self.successful_transactions / self.total_transactions
             
         # Ước tính mức tiêu thụ năng lượng
-        # Giả định từ các thông số của ACSC
-        energy_consumption = self.acsc.stats.get("energy_usage", 0)
+        energy_consumption = 0
+        if hasattr(self.acsc, 'get_statistics'):
+            stats = self.acsc.get_statistics()
+            energy_consumption = stats.get("energy_usage", 0)
         
         # Lưu vào lịch sử
         self.metrics_history['throughput'].append(avg_throughput)
@@ -525,7 +538,7 @@ class AdvancedSimulation:
         
         # Thêm thống kê từ các module
         step_stats['mad_rapid'] = self.mad_rapid.get_statistics()
-        step_stats['htdcm'] = self.htdcm.get_statistics()
+        step_stats['trust_manager'] = self.trust_manager.get_statistics()
         step_stats['acsc'] = self.acsc.get_statistics()
         
         if self.real_data:
@@ -581,36 +594,36 @@ class AdvancedSimulation:
         """
         Hiển thị kết quả mô phỏng dưới dạng đồ thị
         """
-        if not self.metrics_history:
-            print("Khong co du lieu de hien thi!")
+        if not self.metrics_history['throughput']:
+            print("Không có dữ liệu để hiển thị!")
             return
             
         # Tạo các biểu đồ
         fig, axs = plt.subplots(2, 2, figsize=(15, 10))
         
         # 1. Thông lượng
-        axs[0, 0].plot([m['avg_throughput'] for m in self.metrics_history])
-        axs[0, 0].set_title('Throughput')
-        axs[0, 0].set_xlabel('Step')
-        axs[0, 0].set_ylabel('Transactions/step')
+        axs[0, 0].plot(self.metrics_history['throughput'])
+        axs[0, 0].set_title('Thông lượng')
+        axs[0, 0].set_xlabel('Bước')
+        axs[0, 0].set_ylabel('Giao dịch/bước')
         
         # 2. Độ trễ
-        axs[0, 1].plot([m['avg_latency'] for m in self.metrics_history])
-        axs[0, 1].set_title('Average Latency')
-        axs[0, 1].set_xlabel('Step')
-        axs[0, 1].set_ylabel('Time (ms)')
+        axs[0, 1].plot(self.metrics_history['latency'])
+        axs[0, 1].set_title('Độ trễ trung bình')
+        axs[0, 1].set_xlabel('Bước')
+        axs[0, 1].set_ylabel('Thời gian (ms)')
         
         # 3. Tỉ lệ thành công
-        axs[1, 0].plot([m['success_rate'] for m in self.metrics_history])
-        axs[1, 0].set_title('Success Rate')
-        axs[1, 0].set_xlabel('Step')
-        axs[1, 0].set_ylabel('Rate')
+        axs[1, 0].plot(self.metrics_history['success_rate'])
+        axs[1, 0].set_title('Tỉ lệ thành công')
+        axs[1, 0].set_xlabel('Bước')
+        axs[1, 0].set_ylabel('Tỉ lệ')
         
         # 4. Mức độ tắc nghẽn
-        axs[1, 1].plot([m['avg_congestion'] for m in self.metrics_history])
-        axs[1, 1].set_title('Average Congestion')
-        axs[1, 1].set_xlabel('Step')
-        axs[1, 1].set_ylabel('Level')
+        axs[1, 1].plot(self.metrics_history['congestion'])
+        axs[1, 1].set_title('Mức độ tắc nghẽn trung bình')
+        axs[1, 1].set_xlabel('Bước')
+        axs[1, 1].set_ylabel('Mức độ')
         
         plt.tight_layout()
         
@@ -618,14 +631,14 @@ class AdvancedSimulation:
         if hasattr(self, 'acsc') and hasattr(self.acsc, 'get_statistics'):
             stats = self.acsc.get_statistics()
             if 'strategy_usage' in stats:
-                fig, ax = plt.subplots(figsize=(10, 6))
+                plt.figure(figsize=(10, 6))
                 strategies = list(stats['strategy_usage'].keys())
                 usage = list(stats['strategy_usage'].values())
                 
-                ax.bar(strategies, usage)
-                ax.set_title('Consensus Type Distribution')
-                ax.set_xlabel('Strategy')
-                ax.set_ylabel('Usage Count')
+                plt.bar(strategies, usage)
+                plt.title('Phân bố loại đồng thuận')
+                plt.xlabel('Chiến lược')
+                plt.ylabel('Số lần sử dụng')
                 
         plt.show()
     
@@ -682,7 +695,7 @@ class AdvancedSimulation:
             'performance_metrics': avg_metrics,
             'module_stats': {
                 'mad_rapid': self.mad_rapid.get_statistics(),
-                'htdcm': self.htdcm.get_statistics(),
+                'trust_manager': self.trust_manager.get_statistics(),
                 'acsc': self.acsc.get_statistics()
             }
         }
@@ -768,4 +781,4 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    run_advanced_simulation(args) 
+    run_advanced_simulation(args)

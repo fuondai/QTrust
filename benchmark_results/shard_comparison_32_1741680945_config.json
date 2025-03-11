@@ -1,0 +1,10 @@
+{
+  "num_steps": 100,
+  "tx_per_step": 20,
+  "data_dir": "data",
+  "use_real_data": false,
+  "name": "shard_comparison_32",
+  "num_shards": 32,
+  "use_dqn": true,
+  "use_advanced": true
+}

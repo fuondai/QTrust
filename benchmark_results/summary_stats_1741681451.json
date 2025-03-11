@@ -1,0 +1,86 @@
+{
+  "simulation_config": {
+    "num_shards": 8,
+    "use_real_data": false,
+    "use_dqn": true,
+    "steps": 100,
+    "transactions_per_step": 20
+  },
+  "transaction_stats": {
+    "total_transactions": 2000,
+    "successful_transactions": 1754,
+    "success_rate": 0.877
+  },
+  "performance_metrics": {
+    "avg_throughput": 2.17875,
+    "max_throughput": 3.625,
+    "min_throughput": 0.0,
+    "avg_latency": 134.39375,
+    "max_latency": 201.875,
+    "min_latency": 55.625,
+    "avg_energy_consumption": 0.0,
+    "max_energy_consumption": 0,
+    "min_energy_consumption": 0,
+    "avg_success_rate": 0.8453431060674261,
+    "max_success_rate": 0.8934210526315789,
+    "min_success_rate": 0.55,
+    "avg_congestion": 0.33757499999999985,
+    "max_congestion": 0.6075,
+    "min_congestion": 0.0225
+  },
+  "module_stats": {
+    "mad_rapid": {
+      "total_transactions": 0,
+      "optimized_transactions": 0,
+      "latency_improvement": 0.0,
+      "energy_saved": 0.0,
+      "shard_congestion": {
+        "0": 0.0,
+        "1": 0.0,
+        "2": 0.0,
+        "3": 0.0,
+        "4": 0.0,
+        "5": 0.0,
+        "6": 0.0,
+        "7": 0.0
+      },
+      "shard_latency": {
+        "0": 10.0,
+        "1": 10.0,
+        "2": 10.0,
+        "3": 10.0,
+        "4": 10.0,
+        "5": 10.0,
+        "6": 10.0,
+        "7": 10.0
+      }
+    },
+    "trust_manager": {
+      "num_nodes": 0,
+      "avg_trust_score": 0.0,
+      "min_trust_score": 0,
+      "max_trust_score": 0,
+      "suspicious_nodes": 0,
+      "selections_made": 0,
+      "last_selection": null
+    },
+    "acsc": {
+      "total_transactions": 1754,
+      "successful_transactions": 0,
+      "success_rate": 0.0,
+      "total_energy": 47358.0,
+      "avg_energy_per_tx": 27.0,
+      "avg_latency": 5003.9100017306355,
+      "strategy_usage": {
+        "high_trust": 0,
+        "medium_trust": 0,
+        "low_trust": 1754
+      },
+      "strategy_percentages": {
+        "high_trust": 0.0,
+        "medium_trust": 0.0,
+        "low_trust": 1.0
+      }
+    }
+  }
+}

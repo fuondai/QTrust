@@ -1,0 +1,10 @@
+{
+  "num_steps": 100,
+  "tx_per_step": 100,
+  "data_dir": "data",
+  "use_real_data": false,
+  "name": "load_comparison_100",
+  "num_shards": 8,
+  "use_dqn": true,
+  "use_advanced": true
+}

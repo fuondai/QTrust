@@ -1,0 +1,5 @@
+config_id,num_shards,num_steps,tx_per_step,use_dqn,throughput,latency,success_rate,energy_consumption
+0,4,100,20,True,0,0,0,0
+1,4,100,20,True,0,0,0,0
+2,4,100,20,True,0,0,0,0
+3,4,100,20,True,0,0,0,0
