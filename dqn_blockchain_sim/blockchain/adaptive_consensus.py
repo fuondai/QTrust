@@ -250,21 +250,22 @@ class StandardPBFTConsensus(ConsensusStrategy):
 
 class RobustBFTConsensus(ConsensusStrategy):
     """
-    Chiến lược đồng thuận BFT mạnh mẽ cho các shard có độ tin cậy thấp hoặc giao dịch giá trị cao
+    Chiến lược đồng thuận mạnh mẽ sử dụng 3f+1 validator
+    Đảm bảo an toàn cao nhất, nhưng có độ trễ và tiêu thụ năng lượng cao
     """
     
     def __init__(self):
         """
-        Khởi tạo chiến lược đồng thuận BFT mạnh mẽ
+        Khởi tạo chiến lược đồng thuận mạnh mẽ
         """
-        super(RobustBFTConsensus, self).__init__("Robust BFT")
+        super().__init__("RobustBFTConsensus")
         
     def verify_transaction(self, 
                         transaction, 
                         validators: List[str], 
                         trust_scores: Dict[str, float]) -> Tuple[bool, float, float]:
         """
-        Xác minh giao dịch với yêu cầu cao hơn và kiểm tra bổ sung
+        Xác minh giao dịch sử dụng chiến lược BFT mạnh mẽ
         
         Args:
             transaction: Giao dịch cần xác minh
@@ -276,48 +277,42 @@ class RobustBFTConsensus(ConsensusStrategy):
             energy_consumption: Năng lượng tiêu thụ
             latency: Độ trễ
         """
-        # Sử dụng 90% validators và yêu cầu đồng thuận cao
-        num_validators = max(5, int(len(validators) * 0.9))
-        selected_validators = random.sample(validators, min(num_validators, len(validators)))
+        # Số lượng validator tối thiểu cần thiết để đạt đồng thuận
+        min_validators = 3 * self._max_faulty_nodes(len(validators)) + 1
         
-        # Tính điểm tin cậy trung bình
-        avg_trust = sum(trust_scores.get(v, 0.5) for v in selected_validators) / len(selected_validators)
+        # Nếu không đủ validator, trả về False
+        if len(validators) < min_validators:
+            return False, 0.0, 0.0
+            
+        # Xác minh giao dịch
+        valid_votes = 0
         
-        # Quorum cao - 75% thay vì 66%
-        quorum_size = 3 * len(selected_validators) // 4 + 1
-        
-        # Khởi tạo đếm xác thực
-        successful_validations = 0
-        
-        # Mỗi validator thực hiện kiểm tra bổ sung
-        for validator in selected_validators:
+        # Giả lập quá trình xác minh
+        for validator in validators:
+            # Xét điểm tin cậy của validator
             trust = trust_scores.get(validator, 0.5)
             
-            # Mô phỏng kiểm tra kỹ lưỡng hơn
-            basic_check = random.random() < (trust * 0.9 + 0.1)
-            extra_check = random.random() < (trust * 0.95 + 0.05)  # Kiểm tra bổ sung
-            
-            if basic_check and extra_check:
-                successful_validations += 1
+            # Validator có điểm tin cậy thấp có thể từ chối đúng giao dịch
+            if random.random() < 0.8 * trust:  # 80% * trust_score
+                valid_votes += 1
                 
-        # Đạt đồng thuận nếu có đủ số lượng validator thành công
-        success = successful_validations >= quorum_size
+        # Kiểm tra đồng thuận: cần ít nhất 2/3 validator đồng ý
+        consensus_threshold = len(validators) * 2 / 3
+        success = valid_votes >= consensus_threshold
         
-        # Năng lượng tiêu thụ cao hơn do kiểm tra bổ sung
-        energy_per_validator = 1.5  # 150% so với tiêu chuẩn
-        energy_consumption = energy_per_validator * len(selected_validators)
+        # Tính năng lượng tiêu thụ (đơn vị tương đối)
+        energy_consumption = self.calculate_energy_consumption(len(validators))
         
-        # Độ trễ cao hơn do kiểm tra bổ sung và quorum cao hơn
-        base_latency = 300  # Độ trễ cơ bản (ms)
-        phases = 4  # Thêm giai đoạn xác minh
-        validator_factor = math.log2(max(2, len(selected_validators)))
-        latency = base_latency * phases * validator_factor
+        # Tính độ trễ (ms)
+        avg_trust = sum(trust_scores.values()) / len(trust_scores) if trust_scores else 0.5
+        latency = self.calculate_latency(len(validators), avg_trust)
         
+        # Trả về kết quả
         return success, energy_consumption, latency
-
+    
     def calculate_energy_consumption(self, num_validators: int) -> float:
         """
-        Tính toán năng lượng tiêu thụ cho chiến lược mạnh mẽ
+        Tính toán năng lượng tiêu thụ
         
         Args:
             num_validators: Số lượng validator tham gia
@@ -325,25 +320,35 @@ class RobustBFTConsensus(ConsensusStrategy):
         Returns:
             Năng lượng tiêu thụ (đơn vị tương đối)
         """
-        # Tiêu thụ năng lượng cao
-        base_energy = 15.0
-        return base_energy * num_validators * 2.5  # Thuật toán mạnh mẽ tốn nhiều năng lượng hơn
+        # Công thức ước tính: mỗi validator tiêu thụ 5 đơn vị năng lượng
+        return num_validators * 5
         
     def calculate_latency(self, num_validators: int, trust_score: float) -> float:
         """
-        Tính toán độ trễ cho chiến lược mạnh mẽ
+        Tính toán độ trễ
         
         Args:
             num_validators: Số lượng validator tham gia
-            trust_score: Điểm tin cậy của shard xử lý
+            trust_score: Điểm tin cậy trung bình
             
         Returns:
             Độ trễ (ms)
         """
-        # Độ trễ cao
-        base_latency = 350.0
-        # Thuật toán mạnh mẽ có độ phức tạp cao hơn
-        return base_latency * (1 + (num_validators ** 2) * 0.01)
+        # Công thức ước tính: độ trễ tỷ lệ với số lượng validator và giảm theo điểm tin cậy
+        base_latency = 200  # ms
+        return base_latency * (1 + 0.1 * num_validators) * (1 - 0.2 * trust_score)
+        
+    def _max_faulty_nodes(self, total_nodes: int) -> int:
+        """
+        Tính toán số lượng node lỗi tối đa có thể chấp nhận
+        
+        Args:
+            total_nodes: Tổng số node
+            
+        Returns:
+            Số lượng node lỗi tối đa
+        """
+        return (total_nodes - 1) // 3
 
 
 class AdaptiveCrossShardConsensus:
@@ -386,56 +391,111 @@ class AdaptiveCrossShardConsensus:
                                 network,
                                 transaction_type: str = "standard") -> str:
         """
-        Chọn chiến lược đồng thuận dựa trên nhiều yếu tố
+        Lựa chọn chiến lược đồng thuận phù hợp dựa trên ngữ cảnh
         
         Args:
             shards_involved: Danh sách các shard liên quan
             transaction_value: Giá trị giao dịch
-            network: Tham chiếu đến mạng blockchain
+            network: Mạng blockchain
             transaction_type: Loại giao dịch
             
         Returns:
-            Tên chiến lược được chọn
+            Tên chiến lược đồng thuận được chọn
         """
-        # Tính điểm tin cậy trung bình của các shard
-        avg_trust = 0.0
+        # Yếu tố 1: Đánh giá điểm tin cậy trung bình của các shard liên quan
+        avg_trust_score = 0.0
+        total_trust_score = 0.0
+        total_nodes = 0
         
-        if len(shards_involved) > 0:
-            trust_sum = 0.0
-            node_count = 0
-            
-            # Tính điểm tin cậy trung bình cho tất cả các nút trong tất cả các shard liên quan
-            for shard_id in shards_involved:
-                if shard_id in network.shards:
-                    shard = network.shards[shard_id]
-                    for node_id in shard.nodes:
-                        if self.trust_manager:
-                            trust_sum += self.trust_manager.get_trust_score(node_id)
-                        else:
-                            trust_sum += 0.7  # Giá trị mặc định nếu không có trust_manager
-                        node_count += 1
-                        
-            if node_count > 0:
-                avg_trust = trust_sum / node_count
-                
+        for shard_id in shards_involved:
+            if shard_id in network.shards:
+                shard = network.shards[shard_id]
+                for node_id in shard.nodes:
+                    # Lấy điểm tin cậy nếu trust_manager được cung cấp
+                    trust_score = self.trust_manager.get_trust_score(node_id) if self.trust_manager else 0.5
+                    total_trust_score += trust_score
+                    total_nodes += 1
+        
+        # Tính điểm tin cậy trung bình
+        avg_trust_score = total_trust_score / total_nodes if total_nodes > 0 else 0.5
+        
+        # Yếu tố 2: Đánh giá giá trị giao dịch
+        # Ngưỡng giá trị: thấp < 10, trung bình 10-100, cao > 100
+        value_level = 0
+        if transaction_value < 10:
+            value_level = 0  # thấp
+        elif transaction_value < 100:
+            value_level = 1  # trung bình
+        else:
+            value_level = 2  # cao
+        
+        # Yếu tố 3: Loại giao dịch
+        # Giao dịch xuyên shard cần độ tin cậy cao hơn
+        is_cross_shard = transaction_type == "cross_shard"
+        
+        # Xác suất cho mỗi chiến lược
+        high_trust_prob = 0.0
+        medium_trust_prob = 0.0
+        low_trust_prob = 0.0
+        
+        # Tính xác suất dựa trên điểm tin cậy
+        if avg_trust_score > 0.8:
+            high_trust_prob = 0.7
+            medium_trust_prob = 0.2
+            low_trust_prob = 0.1
+        elif avg_trust_score > 0.5:
+            high_trust_prob = 0.3
+            medium_trust_prob = 0.6
+            low_trust_prob = 0.1
+        else:
+            high_trust_prob = 0.1
+            medium_trust_prob = 0.3
+            low_trust_prob = 0.6
+        
         # Điều chỉnh dựa trên giá trị giao dịch
-        # Giao dịch giá trị cao -> bảo mật cao hơn
-        value_factor = min(1.0, transaction_value / 1000)  # Chuẩn hóa giá trị
+        if value_level == 2:  # Giá trị cao
+            low_trust_prob += 0.2
+            medium_trust_prob += 0.1
+            high_trust_prob -= 0.3
+        elif value_level == 1:  # Giá trị trung bình
+            medium_trust_prob += 0.2
+            high_trust_prob -= 0.1
+            low_trust_prob -= 0.1
+        else:  # Giá trị thấp
+            high_trust_prob += 0.2
+            medium_trust_prob -= 0.1
+            low_trust_prob -= 0.1
         
-        # Điều chỉnh dựa trên loại giao dịch
-        type_factor = 0.0
-        if transaction_type == "high_security":
-            type_factor = 0.3  # Giảm điểm tin cậy, yêu cầu bảo mật cao hơn
-        elif transaction_type == "fast":
-            type_factor = -0.2  # Tăng điểm tin cậy, tốc độ trên hết
+        # Chuẩn hóa xác suất
+        total_prob = high_trust_prob + medium_trust_prob + low_trust_prob
+        high_trust_prob /= total_prob
+        medium_trust_prob /= total_prob
+        low_trust_prob /= total_prob
+        
+        # Điều chỉnh nếu là giao dịch xuyên shard
+        if is_cross_shard:
+            # Tăng xác suất sử dụng low_trust cho giao dịch xuyên shard
+            adjustment = 0.2
+            low_trust_prob += adjustment
+            high_trust_prob -= adjustment / 2
+            medium_trust_prob -= adjustment / 2
             
-        # Tính toán điểm cuối cùng
-        final_trust = max(0.0, min(1.0, avg_trust - value_factor * 0.3 - type_factor))
+            # Chuẩn hóa lại
+            total_prob = high_trust_prob + medium_trust_prob + low_trust_prob
+            high_trust_prob = max(0, high_trust_prob / total_prob)
+            medium_trust_prob = max(0, medium_trust_prob / total_prob)
+            low_trust_prob = max(0, low_trust_prob / total_prob)
         
-        # Chọn chiến lược dựa trên điểm tin cậy
-        if final_trust >= 0.7:
+        # Print debug info
+        print(f"Trust scores - High: {high_trust_prob:.2f}, Medium: {medium_trust_prob:.2f}, Low: {low_trust_prob:.2f}")
+        
+        # Đảm bảo có sự đa dạng trong việc lựa chọn chiến lược
+        rand_val = random.random()
+        
+        # Lựa chọn chiến lược theo xác suất
+        if rand_val < high_trust_prob:
             return "high_trust"
-        elif final_trust >= 0.4:
+        elif rand_val < high_trust_prob + medium_trust_prob:
             return "medium_trust"
         else:
             return "low_trust"
@@ -446,59 +506,71 @@ class AdaptiveCrossShardConsensus:
                                      target_shard_id: int,
                                      network) -> Tuple[bool, Dict[str, Any]]:
         """
-        Xử lý giao dịch xuyên mảnh bằng cách chọn và áp dụng chiến lược đồng thuận thích hợp
+        Xử lý giao dịch xuyên mảnh sử dụng chiến lược đồng thuận thích ứng
         
         Args:
             transaction: Giao dịch cần xử lý
-            source_shard_id: ID shard nguồn
-            target_shard_id: ID shard đích
-            network: Tham chiếu đến mạng blockchain
+            source_shard_id: ID mảnh nguồn
+            target_shard_id: ID mảnh đích
+            network: Đối tượng mạng blockchain
             
         Returns:
             success: Kết quả xử lý
             stats: Thống kê về quá trình xử lý
         """
-        # Lấy thông tin về giao dịch
-        tx_value = transaction.amount if hasattr(transaction, 'amount') else 50.0
-        tx_type = transaction.data.get('type', 'standard') if hasattr(transaction, 'data') else 'standard'
+        start_time = time.time()
         
-        # Chọn chiến lược đồng thuận
+        # Tăng tổng số giao dịch
+        self.stats["total_transactions"] += 1
+        
+        # Lấy danh sách validators và điểm tin cậy
+        validators = []
+        trust_scores = {}
+        
+        for node_id in network.shards[source_shard_id].nodes:
+            validators.append(node_id)
+            trust_scores[node_id] = self.trust_manager.get_trust_score(node_id) if self.trust_manager else 0.5
+            
+        for node_id in network.shards[target_shard_id].nodes:
+            if node_id not in validators:  # Tránh trùng lặp nếu node thuộc cả hai mảnh
+                validators.append(node_id)
+                trust_scores[node_id] = self.trust_manager.get_trust_score(node_id) if self.trust_manager else 0.5
+        
+        # Lựa chọn chiến lược đồng thuận dựa trên các yếu tố
+        shards_involved = [source_shard_id, target_shard_id]
+        transaction_value = transaction.value if hasattr(transaction, 'value') else 0
+        
         strategy_name = self.select_consensus_strategy(
-            [source_shard_id, target_shard_id],
-            tx_value,
-            network,
-            tx_type
+            shards_involved=shards_involved,
+            transaction_value=transaction_value,
+            network=network,
+            transaction_type="cross_shard"
         )
         
-        # Lấy chiến lược đã chọn
-        consensus_strategy = self.consensus_strategies[strategy_name]
+        # Lấy chiến lược tương ứng
+        strategy = None
+        if strategy_name == "high_trust":
+            strategy = self.consensus_strategies["high_trust"]
+        elif strategy_name == "medium_trust":
+            strategy = self.consensus_strategies["medium_trust"]
+        elif strategy_name == "low_trust":
+            strategy = self.consensus_strategies["low_trust"]
         
-        # Thu thập danh sách validator từ cả hai shard
-        validators = []
-        
-        if source_shard_id in network.shards:
-            validators.extend(list(network.shards[source_shard_id].nodes))
-            
-        if target_shard_id in network.shards and target_shard_id != source_shard_id:
-            validators.extend(list(network.shards[target_shard_id].nodes))
-            
-        # Lấy điểm tin cậy
-        trust_scores = {}
-        if self.trust_manager:
-            for validator in validators:
-                trust_scores[validator] = self.trust_manager.get_trust_score(validator)
-                
-        # Xác minh giao dịch
-        start_time = time.time()
-        success, energy_consumption, latency = consensus_strategy.verify_transaction(
-            transaction, validators, trust_scores
+        # Xác minh giao dịch sử dụng chiến lược đã chọn
+        success, energy_consumption, latency = strategy.verify_transaction(
+            transaction=transaction,
+            validators=validators,
+            trust_scores=trust_scores
         )
         
         # Cập nhật thống kê
-        self.stats["total_transactions"] += 1
         if success:
             self.stats["successful_transactions"] += 1
             
+            # Gán trạng thái "processed" cho giao dịch nếu thành công
+            if hasattr(transaction, 'status'):
+                transaction.status = 'processed'
+        
         self.stats["total_energy"] += energy_consumption
         self.stats["avg_latency"] = ((self.stats["avg_latency"] * (self.stats["total_transactions"] - 1)) 
                                 + latency) / self.stats["total_transactions"]
@@ -532,7 +604,11 @@ class AdaptiveCrossShardConsensus:
         if self.stats["total_transactions"] > 0:
             for strategy, count in self.stats["strategy_usage"].items():
                 strategy_percentages[strategy] = count / self.stats["total_transactions"]
-                
+        
+        # Log các giá trị quan trọng để debug
+        print(f"ACSC Stats: Total={self.stats['total_transactions']}, Success={self.stats['successful_transactions']}, Rate={success_rate}")
+        print(f"Strategy Usage: {self.stats['strategy_usage']}")
+            
         # Tổng hợp thống kê
         return {
             'total_transactions': self.stats["total_transactions"],

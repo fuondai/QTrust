@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+import math
 
 from dqn_blockchain_sim.configs.simulation_config import DQN_CONFIG
 
@@ -128,55 +129,63 @@ class ShardDQNAgent:
     
     def __init__(self, 
                  shard_id: int,
-                 state_dim: int,
-                 action_dim: int,
+                 state_size: int,
+                 action_size: int,
                  config: Dict[str, Any] = None):
         """
-        Khởi tạo tác tử DQN
+        Khởi tạo tác tử DQN cho shard
         
         Args:
             shard_id: ID của shard tác tử quản lý
-            state_dim: Số chiều của không gian trạng thái
-            action_dim: Số chiều của không gian hành động
+            state_size: Số chiều của không gian trạng thái
+            action_size: Số chiều của không gian hành động
             config: Cấu hình DQN, sử dụng mặc định nếu không cung cấp
         """
         self.shard_id = shard_id
-        self.state_dim = state_dim
-        self.action_dim = action_dim
+        self.state_size = state_size
+        self.action_size = action_size
         self.config = config if config is not None else DQN_CONFIG
         
-        # Khởi tạo mạng DQN chính và mạng mục tiêu
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
+        # Khởi tạo epsilon cho chiến lược ε-greedy
+        self.epsilon = self.config["epsilon_start"]
+        self.epsilon_start = self.config["epsilon_start"]
+        self.epsilon_end = self.config["epsilon_end"]
+        self.epsilon_decay = self.config["epsilon_decay"]
+        self.gamma = self.config["gamma"]  # Hệ số chiết khấu
+        
+        # Bộ nhớ replay
+        self.memory = ReplayBuffer(self.config["replay_buffer_size"])
+        
+        # Bước thực hiện (dùng để giảm epsilon)
+        self.steps_done = 0
+        
+        # Mạng chính sách và mạng đích
         self.policy_net = DQNNetwork(
-            state_dim, 
-            action_dim, 
+            state_size, 
+            action_size, 
             self.config["local_network_architecture"]
         ).to(self.device)
         
         self.target_net = DQNNetwork(
-            state_dim, 
-            action_dim, 
+            state_size, 
+            action_size, 
             self.config["local_network_architecture"]
         ).to(self.device)
-        
-        # Sao chép trọng số từ policy_net sang target_net
         self.target_net.load_state_dict(self.policy_net.state_dict())
-        self.target_net.eval()  # Đặt mạng mục tiêu ở chế độ đánh giá
+        self.target_net.eval()
         
-        # Khởi tạo bộ tối ưu
-        self.optimizer = optim.Adam(
-            self.policy_net.parameters(), 
-            lr=self.config["learning_rate"]
-        )
+        # Bộ tối ưu hóa
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=self.config["learning_rate"])
         
-        # Khởi tạo bộ nhớ
-        self.memory = ReplayBuffer(self.config["replay_buffer_size"])
+        # Tham chiếu đến shard mà tác tử quản lý
+        self.shard = None
         
-        # Các thông số khác
-        self.steps_done = 0
-        self.epsilon = self.config["epsilon_start"]
-        self.gamma = self.config["gamma"]
+        # Thống kê hiệu suất
+        self.total_rewards = 0
+        self.episode_count = 0
+        self.avg_loss = 0.0
         
         # Lưu trữ thông tin huấn luyện
         self.training_info = {
@@ -208,25 +217,47 @@ class ShardDQNAgent:
         
         return state
     
-    def select_action(self, state: np.ndarray) -> int:
+    def select_action(self, state: np.ndarray = None) -> int:
         """
-        Chọn hành động dựa trên trạng thái và chiến lược epsilon-greedy
+        Chọn hành động dựa trên trạng thái hiện tại
         
         Args:
-            state: Trạng thái hiện tại
+            state: Trạng thái hiện tại, hoặc None để lấy trạng thái từ shard
             
         Returns:
-            Hành động được chọn
+            Hành động được chọn (index trong không gian hành động)
         """
-        # Epsilon-greedy: khám phá ngẫu nhiên với xác suất epsilon
-        if random.random() < self.epsilon:
-            return random.randrange(self.action_dim)
+        # Nếu state không được cung cấp, lấy từ shard được gán
+        if state is None:
+            if self.shard is not None and hasattr(self.shard, 'get_state'):
+                state = self.shard.get_state()
+            else:
+                # Nếu không có shard hoặc shard không có phương thức get_state,
+                # tạo một trạng thái mặc định
+                state = np.zeros(self.state_size)
         
-        # Khai thác: chọn hành động tốt nhất theo mô hình hiện tại
-        with torch.no_grad():
-            state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            q_values = self.policy_net(state_tensor)
-            return q_values.max(1)[1].item()
+        # Chuyển đổi state sang tensor
+        state = torch.FloatTensor(state).to(self.device)
+        
+        # Quyết định xem có thực hiện khám phá hay không
+        sample = random.random()
+        
+        # Nếu các thuộc tính epsilon_* không tồn tại, sử dụng epsilon trực tiếp
+        if hasattr(self, 'epsilon_start') and hasattr(self, 'epsilon_end') and hasattr(self, 'epsilon_decay'):
+            eps_threshold = self.epsilon_end + (self.epsilon_start - self.epsilon_end) * \
+                math.exp(-1. * self.steps_done / self.epsilon_decay)
+        else:
+            eps_threshold = self.epsilon
+        
+        self.steps_done += 1
+        
+        if sample > eps_threshold:
+            with torch.no_grad():
+                # Chọn hành động tối ưu theo mô hình
+                return self.policy_net(state).max(0)[1].view(1, 1).item()
+        else:
+            # Chọn hành động ngẫu nhiên
+            return random.randrange(self.action_size)
         
     def update_epsilon(self) -> None:
         """
@@ -236,7 +267,6 @@ class ShardDQNAgent:
             self.config["epsilon_end"],
             self.epsilon - self.config["epsilon_decay"]
         )
-        self.training_info['epsilon_values'].append(self.epsilon)
         
     def optimize_model(self, batch_size: int) -> float:
         """
@@ -410,14 +440,14 @@ class ShardDQNAgent:
         
         # Khởi tạo lại mạng nơ-ron
         self.policy_net = DQNNetwork(
-            self.state_dim, 
-            self.action_dim, 
+            self.state_size, 
+            self.action_size, 
             self.config["local_network_architecture"]
         ).to(self.device)
         
         self.target_net = DQNNetwork(
-            self.state_dim, 
-            self.action_dim, 
+            self.state_size, 
+            self.action_size, 
             self.config["local_network_architecture"]
         ).to(self.device)
         
@@ -435,8 +465,8 @@ class MultiAgentDQNController:
     
     def __init__(self, 
                  num_shards: int,
-                 state_dim: int,
-                 action_dim: int,
+                 state_size: int,
+                 action_size: int,
                  coordination_state_dim: int = None,
                  coordination_action_dim: int = None,
                  config: Dict[str, Any] = None):
@@ -445,8 +475,8 @@ class MultiAgentDQNController:
         
         Args:
             num_shards: Số lượng shard/tác tử
-            state_dim: Số chiều của không gian trạng thái cho mỗi tác tử
-            action_dim: Số chiều của không gian hành động cho mỗi tác tử
+            state_size: Số chiều của không gian trạng thái cho mỗi tác tử
+            action_size: Số chiều của không gian hành động cho mỗi tác tử
             coordination_state_dim: Số chiều trạng thái cho tác tử phối hợp
             coordination_action_dim: Số chiều hành động cho tác tử phối hợp
             config: Cấu hình, sử dụng mặc định nếu không cung cấp
@@ -457,7 +487,7 @@ class MultiAgentDQNController:
         # Tạo các tác tử DQN cho từng shard
         self.shard_agents = {}
         for i in range(num_shards):
-            self.shard_agents[i] = ShardDQNAgent(i, state_dim, action_dim, self.config)
+            self.shard_agents[i] = ShardDQNAgent(i, state_size, action_size, self.config)
             
         # Tạo tác tử phối hợp (nếu có)
         self.has_coordinator = coordination_state_dim is not None and coordination_action_dim is not None

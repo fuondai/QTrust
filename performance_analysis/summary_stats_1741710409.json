@@ -1,0 +1,39 @@
+{
+  "simulation_config": {
+    "num_shards": 4,
+    "consensus_algorithm": "PoW",
+    "block_time": 10,
+    "network_latency": 100,
+    "iterations": 100
+  },
+  "transaction_stats": {
+    "total": 10000,
+    "successful": 6759,
+    "success_rate": 0.6759,
+    "transactions_per_step": 20,
+    "cross_shard_transactions": {
+      "total": 7099,
+      "successful": 6516,
+      "success_rate": 0.9178757571488942
+    }
+  },
+  "performance_stats": {
+    "avg_throughput": 1.75,
+    "avg_latency": 86.23750000000001,
+    "energy_consumption": 479669.58,
+    "congestion_level": 0.9634417713034951
+  },
+  "module_stats": {
+    "mad_rapid": {
+      "optimized_tx_count": 3951,
+      "total_tx_processed": 7985,
+      "avg_optimization_time": 0,
+      "congestion_prediction_accuracy": 0
+    },
+    "acsc": {
+      "successful_tx_count": 0,
+      "total_tx_processed": 0,
+      "strategy_usage": {}
+    }
+  }
+}
