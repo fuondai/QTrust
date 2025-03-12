@@ -385,6 +385,16 @@ class AdaptiveCrossShardConsensus:
             }
         }
         
+        # Khởi tạo thuộc tính mới để theo dõi hiệu suất
+        self.total_tx_processed = 0
+        self.successful_tx_count = 0
+        self.avg_processing_time = 0
+        self.strategy_success_rates = {
+            "high_trust": {"success": 0, "total": 0},
+            "medium_trust": {"success": 0, "total": 0},
+            "low_trust": {"success": 0, "total": 0}
+        }
+
     def select_consensus_strategy(self, 
                                 shards_involved: List[int], 
                                 transaction_value: float,
@@ -402,104 +412,65 @@ class AdaptiveCrossShardConsensus:
         Returns:
             Tên chiến lược đồng thuận được chọn
         """
-        # Yếu tố 1: Đánh giá điểm tin cậy trung bình của các shard liên quan
-        avg_trust_score = 0.0
-        total_trust_score = 0.0
-        total_nodes = 0
-        
-        for shard_id in shards_involved:
-            if shard_id in network.shards:
-                shard = network.shards[shard_id]
-                for node_id in shard.nodes:
-                    # Lấy điểm tin cậy nếu trust_manager được cung cấp
-                    trust_score = self.trust_manager.get_trust_score(node_id) if self.trust_manager else 0.5
-                    total_trust_score += trust_score
-                    total_nodes += 1
-        
-        # Tính điểm tin cậy trung bình
-        avg_trust_score = total_trust_score / total_nodes if total_nodes > 0 else 0.5
-        
-        # Yếu tố 2: Đánh giá giá trị giao dịch
-        # Ngưỡng giá trị: thấp < 10, trung bình 10-100, cao > 100
-        value_level = 0
-        if transaction_value < 10:
-            value_level = 0  # thấp
-        elif transaction_value < 100:
-            value_level = 1  # trung bình
-        else:
-            value_level = 2  # cao
-        
-        # Yếu tố 3: Loại giao dịch
-        # Giao dịch xuyên shard cần độ tin cậy cao hơn
-        is_cross_shard = transaction_type == "cross_shard"
-        
-        # Xác suất cho mỗi chiến lược
-        high_trust_prob = 0.0
-        medium_trust_prob = 0.0
-        low_trust_prob = 0.0
-        
-        # Tính xác suất dựa trên điểm tin cậy
-        if avg_trust_score > 0.8:
-            high_trust_prob = 0.7
-            medium_trust_prob = 0.2
-            low_trust_prob = 0.1
-        elif avg_trust_score > 0.5:
-            high_trust_prob = 0.3
-            medium_trust_prob = 0.6
-            low_trust_prob = 0.1
-        else:
-            high_trust_prob = 0.1
-            medium_trust_prob = 0.3
-            low_trust_prob = 0.6
-        
-        # Điều chỉnh dựa trên giá trị giao dịch
-        if value_level == 2:  # Giá trị cao
-            low_trust_prob += 0.2
-            medium_trust_prob += 0.1
-            high_trust_prob -= 0.3
-        elif value_level == 1:  # Giá trị trung bình
-            medium_trust_prob += 0.2
-            high_trust_prob -= 0.1
-            low_trust_prob -= 0.1
-        else:  # Giá trị thấp
-            high_trust_prob += 0.2
-            medium_trust_prob -= 0.1
-            low_trust_prob -= 0.1
-        
-        # Chuẩn hóa xác suất
-        total_prob = high_trust_prob + medium_trust_prob + low_trust_prob
-        high_trust_prob /= total_prob
-        medium_trust_prob /= total_prob
-        low_trust_prob /= total_prob
-        
-        # Điều chỉnh nếu là giao dịch xuyên shard
-        if is_cross_shard:
-            # Tăng xác suất sử dụng low_trust cho giao dịch xuyên shard
-            adjustment = 0.2
-            low_trust_prob += adjustment
-            high_trust_prob -= adjustment / 2
-            medium_trust_prob -= adjustment / 2
+        # Kiểm tra xem Trust Manager có hỗ trợ các API mở rộng không
+        if self.trust_manager and hasattr(self.trust_manager, 'get_trust_between_shards'):
+            # Lấy điểm tin cậy giữa các shard
+            trust_scores = []
+            for i in range(len(shards_involved) - 1):
+                src_shard = shards_involved[i]
+                dst_shard = shards_involved[i+1]
+                trust_score = self.trust_manager.get_trust_between_shards(src_shard, dst_shard)
+                trust_scores.append(trust_score)
             
-            # Chuẩn hóa lại
-            total_prob = high_trust_prob + medium_trust_prob + low_trust_prob
-            high_trust_prob = max(0, high_trust_prob / total_prob)
-            medium_trust_prob = max(0, medium_trust_prob / total_prob)
-            low_trust_prob = max(0, low_trust_prob / total_prob)
-        
-        # Print debug info
-        print(f"Trust scores - High: {high_trust_prob:.2f}, Medium: {medium_trust_prob:.2f}, Low: {low_trust_prob:.2f}")
-        
-        # Đảm bảo có sự đa dạng trong việc lựa chọn chiến lược
-        rand_val = random.random()
-        
-        # Lựa chọn chiến lược theo xác suất
-        if rand_val < high_trust_prob:
-            return "high_trust"
-        elif rand_val < high_trust_prob + medium_trust_prob:
-            return "medium_trust"
-        else:
-            return "low_trust"
+            # Lấy điểm tin cậy thấp nhất
+            min_trust = min(trust_scores) if trust_scores else 0.5
             
+            # Phân tích thành phần quan trọng khác
+            # 1. Giá trị giao dịch (cao/thấp)
+            is_high_value = transaction_value > 100
+            
+            # 2. Kiểm tra loại giao dịch
+            is_cross_shard = transaction_type == "cross_shard"
+            
+            # 3. Kiểm tra hiệu suất chiến lược trong quá khứ
+            if hasattr(self, 'strategy_success_rates'):
+                high_trust_rate = self.strategy_success_rates["high_trust"]["success"] / max(1, self.strategy_success_rates["high_trust"]["total"])
+                medium_trust_rate = self.strategy_success_rates["medium_trust"]["success"] / max(1, self.strategy_success_rates["medium_trust"]["total"])
+                low_trust_rate = self.strategy_success_rates["low_trust"]["success"] / max(1, self.strategy_success_rates["low_trust"]["total"])
+                
+                # Nếu một chiến lược có tỷ lệ thành công vượt trội, tăng khả năng chọn nó
+                best_rate = max(high_trust_rate, medium_trust_rate, low_trust_rate)
+                if best_rate > 0.8 and (best_rate - min(high_trust_rate, medium_trust_rate, low_trust_rate)) > 0.2:
+                    if high_trust_rate == best_rate:
+                        return "high_trust"
+                    elif medium_trust_rate == best_rate:
+                        return "medium_trust"
+                    else:
+                        return "low_trust"
+            
+            # Kết hợp các yếu tố để quyết định
+            if min_trust > 0.8:
+                # Độ tin cậy cao
+                if is_high_value and is_cross_shard:
+                    return "medium_trust"  # Cẩn thận hơn với giao dịch giá trị cao
+                else:
+                    return "high_trust"
+            elif min_trust > 0.5:
+                # Độ tin cậy trung bình
+                if is_high_value:
+                    return "low_trust"  # An toàn hơn với giao dịch giá trị cao
+                else:
+                    return "medium_trust"
+            else:
+                # Độ tin cậy thấp
+                return "low_trust"
+        else:
+            # Fallback nếu không có thông tin tin cậy
+            if transaction_value > 100:
+                return "low_trust"  # Cẩn thận với giao dịch giá trị cao
+            else:
+                return "medium_trust"
+
     def process_cross_shard_transaction(self, 
                                      transaction, 
                                      source_shard_id: int, 
@@ -520,8 +491,21 @@ class AdaptiveCrossShardConsensus:
         """
         start_time = time.time()
         
+        # Đảm bảo các thuộc tính theo dõi hiệu suất đã được khởi tạo
+        if not hasattr(self, 'total_tx_processed'):
+            self.total_tx_processed = 0
+        if not hasattr(self, 'successful_tx_count'):
+            self.successful_tx_count = 0
+        if not hasattr(self, 'strategy_success_rates'):
+            self.strategy_success_rates = {
+                "high_trust": {"success": 0, "total": 0},
+                "medium_trust": {"success": 0, "total": 0},
+                "low_trust": {"success": 0, "total": 0}
+            }
+        
         # Tăng tổng số giao dịch
         self.stats["total_transactions"] += 1
+        self.total_tx_processed += 1
         
         # Lấy danh sách validators và điểm tin cậy
         validators = []
@@ -535,6 +519,20 @@ class AdaptiveCrossShardConsensus:
             if node_id not in validators:  # Tránh trùng lặp nếu node thuộc cả hai mảnh
                 validators.append(node_id)
                 trust_scores[node_id] = self.trust_manager.get_trust_score(node_id) if self.trust_manager else 0.5
+                
+        # Đảm bảo có ít nhất 3 validators
+        if len(validators) < 3:
+            additional_nodes = []
+            for shard_id in network.shards:
+                if shard_id not in [source_shard_id, target_shard_id]:
+                    additional_nodes.extend(network.shards[shard_id].nodes[:2])  # Lấy tối đa 2 node từ mỗi shard khác
+                    if len(validators) + len(additional_nodes) >= 3:
+                        break
+            
+            for node_id in additional_nodes:
+                if node_id not in validators:
+                    validators.append(node_id)
+                    trust_scores[node_id] = self.trust_manager.get_trust_score(node_id) if self.trust_manager else 0.5
         
         # Lựa chọn chiến lược đồng thuận dựa trên các yếu tố
         shards_involved = [source_shard_id, target_shard_id]
@@ -556,6 +554,10 @@ class AdaptiveCrossShardConsensus:
         elif strategy_name == "low_trust":
             strategy = self.consensus_strategies["low_trust"]
         
+        # Cập nhật số lượng giao dịch cho chiến lược này
+        if strategy_name in self.strategy_success_rates:
+            self.strategy_success_rates[strategy_name]["total"] += 1
+        
         # Xác minh giao dịch sử dụng chiến lược đã chọn
         success, energy_consumption, latency = strategy.verify_transaction(
             transaction=transaction,
@@ -563,63 +565,115 @@ class AdaptiveCrossShardConsensus:
             trust_scores=trust_scores
         )
         
+        # Tăng tỷ lệ thành công cho giao dịch đặc biệt
+        if not success:
+            # Thử lại với chiến lược mạnh hơn nếu thất bại
+            if strategy_name != "low_trust" and transaction_value > 50:
+                print(f"Giao dịch thất bại với chiến lược {strategy_name}, thử lại với chiến lược low_trust")
+                strategy = self.consensus_strategies["low_trust"]
+                strategy_name = "low_trust"
+                success, energy_consumption, latency = strategy.verify_transaction(
+                    transaction=transaction,
+                    validators=validators,
+                    trust_scores=trust_scores
+                )
+        
         # Cập nhật thống kê
         if success:
             self.stats["successful_transactions"] += 1
+            self.successful_tx_count += 1
+            
+            # Cập nhật tỷ lệ thành công cho chiến lược
+            if strategy_name in self.strategy_success_rates:
+                self.strategy_success_rates[strategy_name]["success"] += 1
             
             # Gán trạng thái "processed" cho giao dịch nếu thành công
             if hasattr(transaction, 'status'):
                 transaction.status = 'processed'
+        else:
+            # Gán trạng thái "failed" nếu thất bại
+            if hasattr(transaction, 'status'):
+                transaction.status = 'failed'
         
         self.stats["total_energy"] += energy_consumption
         self.stats["avg_latency"] = ((self.stats["avg_latency"] * (self.stats["total_transactions"] - 1)) 
                                 + latency) / self.stats["total_transactions"]
         self.stats["strategy_usage"][strategy_name] += 1
         
+        # Tính thời gian xử lý
+        processing_time = time.time() - start_time
+        if hasattr(self, 'avg_processing_time'):
+            self.avg_processing_time = (self.avg_processing_time * (self.total_tx_processed - 1) + processing_time) / self.total_tx_processed
+        else:
+            self.avg_processing_time = processing_time
+        
         # Thống kê cho lần gọi hiện tại
         current_stats = {
-            'success': success,
-            'energy_consumption': energy_consumption,
-            'latency': latency,
-            'strategy': strategy_name,
-            'processing_time': time.time() - start_time
+            "success": success,
+            "energy_consumption": energy_consumption,
+            "latency": latency,
+            "strategy": strategy_name,
+            "processing_time": processing_time,
+            "validators_count": len(validators)
         }
         
         return success, current_stats
     
     def get_statistics(self) -> Dict[str, Any]:
         """
-        Lấy thống kê về hoạt động của cơ chế đồng thuận
+        Trả về thống kê về cơ chế đồng thuận xuyên mảnh thích ứng
         
         Returns:
-            Từ điển chứa các thống kê
+            Dict[str, Any]: Thống kê
         """
-        # Tính tỉ lệ thành công
-        success_rate = 0.0
-        if self.stats["total_transactions"] > 0:
-            success_rate = self.stats["successful_transactions"] / self.stats["total_transactions"]
+        # Đảm bảo các thuộc tính theo dõi hiệu suất đã được khởi tạo
+        if not hasattr(self, 'total_tx_processed'):
+            self.total_tx_processed = 0
+        if not hasattr(self, 'successful_tx_count'):
+            self.successful_tx_count = 0
+        if not hasattr(self, 'strategy_success_rates'):
+            self.strategy_success_rates = {
+                "high_trust": {"success": 0, "total": 0},
+                "medium_trust": {"success": 0, "total": 0},
+                "low_trust": {"success": 0, "total": 0}
+            }
             
-        # Tính tỷ lệ sử dụng các chiến lược
-        strategy_percentages = {}
-        if self.stats["total_transactions"] > 0:
-            for strategy, count in self.stats["strategy_usage"].items():
-                strategy_percentages[strategy] = count / self.stats["total_transactions"]
+        # Tính toán các mức độ thành công
+        success_rate = self.successful_tx_count / max(1, self.total_tx_processed)
         
-        # Log các giá trị quan trọng để debug
-        print(f"ACSC Stats: Total={self.stats['total_transactions']}, Success={self.stats['successful_transactions']}, Rate={success_rate}")
-        print(f"Strategy Usage: {self.stats['strategy_usage']}")
-            
-        # Tổng hợp thống kê
-        return {
-            'total_transactions': self.stats["total_transactions"],
-            'successful_transactions': self.stats["successful_transactions"],
-            'success_rate': success_rate,
-            'total_energy': self.stats["total_energy"],
-            'avg_energy_per_tx': (self.stats["total_energy"] / max(1, self.stats["total_transactions"])),
-            'avg_latency': self.stats["avg_latency"],
-            'strategy_usage': self.stats["strategy_usage"],
-            'strategy_percentages': strategy_percentages
+        # Tính toán tỷ lệ thành công cho từng chiến lược
+        strategy_success_rates = {}
+        for strategy, stats in self.strategy_success_rates.items():
+            strategy_success_rates[strategy] = stats["success"] / max(1, stats["total"])
+        
+        # Tạo thống kê chi tiết
+        stats = {
+            "total_transactions": self.stats["total_transactions"],
+            "successful_transactions": self.stats["successful_transactions"],
+            "success_rate": success_rate,
+            "total_energy": self.stats["total_energy"],
+            "avg_latency": self.stats["avg_latency"],
+            "strategy_usage": self.stats["strategy_usage"],
+            "strategy_success_rates": strategy_success_rates,
+            "avg_processing_time": getattr(self, 'avg_processing_time', 0)
         }
+        
+        # Thêm phân tích về phân bố chiến lược
+        total_usage = sum(self.stats["strategy_usage"].values())
+        if total_usage > 0:
+            strategy_distribution = {}
+            for strategy, count in self.stats["strategy_usage"].items():
+                strategy_distribution[strategy] = count / total_usage
+            stats["strategy_distribution"] = strategy_distribution
+        
+        # Thêm thông tin về mô hình tin cậy
+        if self.trust_manager:
+            stats["trust_model"] = {
+                "avg_trust_score": sum(self.trust_manager.trust_scores.values()) / max(1, len(self.trust_manager.trust_scores)) if hasattr(self.trust_manager, 'trust_scores') and self.trust_manager.trust_scores else 0,
+                "trust_violations": getattr(self.trust_manager, 'trust_violations', 0)
+            }
+        
+        return stats
     
     def reset_statistics(self) -> None:
         """

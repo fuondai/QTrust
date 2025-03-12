@@ -822,15 +822,61 @@ class MADRAPIDProtocol:
         # In thông tin gỡ lỗi
         print(f"Xác suất tối ưu hóa: {optimization_chance:.2f} (base={base_optimization_chance:.2f}, distance={distance_factor:.2f}, size={size_factor:.2f}, congestion={congestion_factor:.2f})")
         
-        # Xác định có tối ưu hóa được hay không - LUÔN thử tối ưu
-        # is_optimized = random.random() < optimization_chance
+        # Sử dụng DQN Agent nếu có
         is_optimized = True
+        path = None
+        
+        # Kiểm tra xem có DQN agents không
+        if hasattr(self, 'dqn_agents') and self.dqn_agents and source_shard in self.dqn_agents:
+            # Lấy agent cho shard nguồn
+            agent = self.dqn_agents[source_shard]
+            
+            # Lấy trạng thái hiện tại của shard
+            state = self._get_shard_state(source_shard)
+            
+            # Sử dụng agent để chọn hành động
+            action = agent.select_action(state)
+            
+            # Hành động: 0 = tối ưu hóa đường đi, 1 = sử dụng đường đi trực tiếp, 2 = từ chối giao dịch
+            if action == 0:
+                # Tối ưu hóa đường đi
+                print(f"DQN Agent quyết định tối ưu hóa đường đi cho giao dịch {transaction_id}")
+                path = self.optimize_cross_shard_path(source_shard, target_shard)
+                is_optimized = path is not None
+            elif action == 1:
+                # Sử dụng đường đi trực tiếp
+                print(f"DQN Agent quyết định sử dụng đường đi trực tiếp cho giao dịch {transaction_id}")
+                path = [source_shard, target_shard]
+                is_optimized = True
+            else:
+                # Từ chối giao dịch
+                print(f"DQN Agent quyết định từ chối giao dịch {transaction_id}")
+                is_optimized = False
+                
+            # Tính toán phần thưởng dựa trên kết quả
+            reward = 0
+            if is_optimized:
+                # Phần thưởng dương nếu tối ưu hóa thành công
+                reward = 1.0 * optimization_chance
+                if path and len(path) > 2:
+                    # Phần thưởng cao hơn nếu tìm được đường đi phức tạp
+                    reward += 0.5
+            else:
+                # Phần thưởng âm nếu từ chối giao dịch
+                reward = -0.5
+                
+            # Cập nhật agent với phần thưởng
+            agent.reward(reward)
+            
+            # Huấn luyện agent
+            if agent.is_training:
+                agent.train()
+        else:
+            # Nếu không có DQN agent, sử dụng phương pháp mặc định
+            path = self.optimize_cross_shard_path(source_shard, target_shard)
+            is_optimized = path is not None
         
         if is_optimized:
-            # Tối ưu hóa đường dẫn
-            print(f"Đang tìm đường đi tối ưu từ shard {source_shard} đến shard {target_shard}...")
-            path = self.optimize_cross_shard_path(source_shard, target_shard)
-            
             # Xử lý thành công nếu tìm được đường đi tối ưu
             if path:
                 transaction.status = "processed"
@@ -851,23 +897,49 @@ class MADRAPIDProtocol:
                                 shard.successful_cs_tx_count = 0
                             shard.successful_cs_tx_count += 1
                 
-                return True  # Trả về True thay vì transaction
-            else:
-                print(f"Không tìm được đường đi tối ưu từ shard {source_shard} đến shard {target_shard}")
+                # Cập nhật số lượng giao dịch xuyên shard thành công
+                if not hasattr(self, 'cross_shard_success_count'):
+                    self.cross_shard_success_count = 0
+                self.cross_shard_success_count += 1
+                
+                return True
         
-        # Thử xử lý theo cách thông thường nếu không tối ưu được
-        # Xác suất thành công cao hơn nếu đã cố gắng tối ưu hóa
-        fallback_success_chance = 0.8 if is_optimized else 0.6  # Tăng xác suất thành công
-        fallback_result = random.random() < fallback_success_chance
+        # Nếu không thể tối ưu hóa, đánh dấu là thất bại
+        transaction.status = "failed"
+        print(f"Không thể tối ưu hóa giao dịch {transaction_id}")
+        return False
         
-        if fallback_result:
-            transaction.status = "processed"
-            print(f"Xử lý thành công giao dịch {transaction_id} từ shard {source_shard} đến shard {target_shard} theo cách thông thường")
-            return True  # Trả về True thay vì transaction
-        else:
-            transaction.status = "failed"
-            print(f"Xử lý thất bại giao dịch {transaction_id} từ shard {source_shard} đến shard {target_shard}")
-            return False  # Trả về False thay vì transaction
+    def _get_shard_state(self, shard_id):
+        """
+        Lấy trạng thái hiện tại của shard để sử dụng cho DQN
+        
+        Args:
+            shard_id: ID của shard cần lấy trạng thái
+            
+        Returns:
+            Mảng numpy chứa trạng thái của shard
+        """
+        import numpy as np
+        
+        # Khởi tạo trạng thái mặc định
+        state = np.zeros(8)
+        
+        # Lấy thông tin shard từ network nếu có
+        if hasattr(self, 'network') and self.network and hasattr(self.network, 'shards'):
+            if shard_id in self.network.shards:
+                shard = self.network.shards[shard_id]
+                
+                # Lấy các đặc trưng từ shard
+                state[0] = len(getattr(shard, 'transaction_queue', [])) / 100.0  # Kích thước hàng đợi giao dịch
+                state[1] = getattr(shard, 'latency', 0) / 1000.0  # Độ trễ
+                state[2] = getattr(shard, 'congestion_level', 0)  # Mức độ tắc nghẽn
+                state[3] = len(getattr(shard, 'nodes', [])) / 10.0  # Số lượng node
+                state[4] = getattr(shard, 'throughput', 0) / 100.0  # Throughput
+                state[5] = getattr(shard, 'cross_shard_tx_count', 0) / 50.0  # Số lượng giao dịch xuyên shard
+                state[6] = getattr(shard, 'total_gas_used', 0) / 1000000.0  # Tổng gas đã sử dụng
+                state[7] = getattr(shard, 'total_fees', 0) / 1000.0  # Tổng phí giao dịch
+        
+        return state
     
     def get_statistics(self) -> Dict[str, Any]:
         """

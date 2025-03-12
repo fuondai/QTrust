@@ -4,7 +4,7 @@ Module triển khai tác tử DQN (Deep Q-Network) cho việc tối ưu hóa blo
 
 import numpy as np
 import random
-from collections import deque
+from collections import deque, namedtuple
 from typing import List, Dict, Tuple, Optional, Any, Union
 import torch
 import torch.nn as nn
@@ -13,6 +13,9 @@ import torch.nn.functional as F
 import math
 
 from dqn_blockchain_sim.configs.simulation_config import DQN_CONFIG
+
+# Định nghĩa namedtuple cho trải nghiệm
+Transition = namedtuple('Transition', ('state', 'action', 'reward', 'next_state', 'done'))
 
 
 class DQNNetwork(nn.Module):
@@ -76,8 +79,8 @@ class ReplayBuffer:
         """
         self.memory = deque(maxlen=capacity)
         
-    def add(self, state: np.ndarray, action: int, reward: float, 
-            next_state: np.ndarray, done: bool) -> None:
+    def push(self, state: np.ndarray, action: int, reward: float, 
+            next_state: Optional[np.ndarray], done: bool) -> None:
         """
         Thêm một trải nghiệm vào bộ nhớ
         
@@ -85,12 +88,12 @@ class ReplayBuffer:
             state: Trạng thái hiện tại
             action: Hành động đã thực hiện
             reward: Phần thưởng nhận được
-            next_state: Trạng thái tiếp theo
+            next_state: Trạng thái tiếp theo (None nếu là trạng thái kết thúc)
             done: Cờ kết thúc episode
         """
-        self.memory.append((state, action, reward, next_state, done))
+        self.memory.append(Transition(state, action, reward, next_state, done))
         
-    def sample(self, batch_size: int) -> Tuple:
+    def sample(self, batch_size: int) -> List[Transition]:
         """
         Lấy mẫu ngẫu nhiên từ bộ nhớ
         
@@ -98,19 +101,9 @@ class ReplayBuffer:
             batch_size: Kích thước batch
             
         Returns:
-            Tuple chứa các batch (states, actions, rewards, next_states, dones)
+            Danh sách các Transition
         """
-        batch = random.sample(self.memory, min(batch_size, len(self.memory)))
-        states, actions, rewards, next_states, dones = zip(*batch)
-        
-        # Chuyển đổi thành các tensor numpy
-        return (
-            np.array(states), 
-            np.array(actions), 
-            np.array(rewards, dtype=np.float32), 
-            np.array(next_states), 
-            np.array(dones, dtype=np.uint8)
-        )
+        return random.sample(self.memory, min(batch_size, len(self.memory)))
         
     def __len__(self) -> int:
         """
@@ -173,26 +166,40 @@ class ShardDQNAgent:
             action_size, 
             self.config["local_network_architecture"]
         ).to(self.device)
+        
+        # Sao chép tham số từ policy_net sang target_net
         self.target_net.load_state_dict(self.policy_net.state_dict())
-        self.target_net.eval()
+        self.target_net.eval()  # Đặt target_net ở chế độ evaluation
         
-        # Bộ tối ưu hóa
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=self.config["learning_rate"])
+        # Định nghĩa optimizer
+        self.optimizer = optim.Adam(
+            self.policy_net.parameters(), 
+            lr=self.config["learning_rate"]
+        )
         
-        # Tham chiếu đến shard mà tác tử quản lý
+        # Lưu tham chiếu đến shard
         self.shard = None
         
-        # Thống kê hiệu suất
-        self.total_rewards = 0
-        self.episode_count = 0
-        self.avg_loss = 0.0
-        
-        # Lưu trữ thông tin huấn luyện
+        # Thông tin theo dõi quá trình huấn luyện
         self.training_info = {
-            'losses': [],
+            'episodes': 0,
             'rewards': [],
-            'epsilon_values': []
+            'losses': [],
+            'episode_lengths': []
         }
+        
+        # Thêm trạng thái hiện tại để theo dõi
+        self.current_state = None
+        self.last_action = None
+        self.pending_reward = 0.0
+        self.pending_experience = None
+        
+        # Theo dõi điểm thưởng tích lũy
+        self.accumulated_reward = 0.0
+        self.episode_actions = []
+        
+        # Cờ chỉ ra trạng thái huấn luyện
+        self.is_training = True
         
     def get_state_representation(self, shard_state: Dict[str, Any]) -> np.ndarray:
         """
@@ -217,6 +224,98 @@ class ShardDQNAgent:
         
         return state
     
+    def predict(self, state: np.ndarray) -> int:
+        """
+        Dự đoán hành động tốt nhất cho trạng thái đã cho mà không sử dụng ε-greedy
+        
+        Args:
+            state: Trạng thái hiện tại
+            
+        Returns:
+            Hành động tốt nhất theo model
+        """
+        # Chuyển đổi state thành numpy array nếu nó là list
+        if isinstance(state, list):
+            state = np.array(state, dtype=np.float32)
+        
+        # Đảm bảo state có kích thước đúng
+        if not hasattr(state, 'shape'):
+            print(f"Cảnh báo: State không có thuộc tính shape. Loại: {type(state)}")
+            # Chuyển đổi thành numpy array
+            state = np.array(state, dtype=np.float32)
+            
+        if state.shape[0] != self.state_size:
+            print(f"Cảnh báo: Kích thước state không khớp. Nhận được {state.shape[0]}, cần {self.state_size}")
+            # Điều chỉnh kích thước state
+            if state.shape[0] < self.state_size:
+                # Nếu state nhỏ hơn, thêm các giá trị 0
+                padded_state = np.zeros(self.state_size)
+                padded_state[:state.shape[0]] = state
+                state = padded_state
+            else:
+                # Nếu state lớn hơn, cắt bớt
+                state = state[:self.state_size]
+        
+        # Chuyển đổi state sang tensor và thêm batch dimension
+        state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+        
+        # Dự đoán hành động tốt nhất
+        with torch.no_grad():
+            q_values = self.policy_net(state_tensor)
+            return q_values.max(1)[1].item()
+    
+    def reward(self, reward_value: float) -> None:
+        """
+        Cung cấp phần thưởng cho agent sau khi thực hiện hành động
+        
+        Args:
+            reward_value: Giá trị phần thưởng
+        """
+        # Cập nhật phần thưởng tích lũy
+        self.accumulated_reward += reward_value
+        self.pending_reward += reward_value
+        
+        # Nếu có trải nghiệm đang chờ xử lý, cập nhật nó
+        if self.pending_experience is not None:
+            state, action, _, next_state, done = self.pending_experience
+            self.pending_experience = (state, action, self.pending_reward, next_state, done)
+            
+            # Thêm vào bộ nhớ nếu đã đủ thông tin
+            if next_state is not None:
+                self.add_experience(*self.pending_experience)
+                self.pending_experience = None
+                self.pending_reward = 0.0
+    
+    def train(self, batch_size: int = None) -> float:
+        """
+        Huấn luyện agent từ bộ nhớ replay
+        
+        Args:
+            batch_size: Kích thước batch, mặc định lấy từ config
+            
+        Returns:
+            Giá trị loss sau khi huấn luyện
+        """
+        # Nếu không ở chế độ huấn luyện, không làm gì cả
+        if not self.is_training:
+            return 0.0
+            
+        # Sử dụng batch_size từ config nếu không cung cấp
+        if batch_size is None:
+            batch_size = self.config['batch_size']
+            
+        # Tối ưu hóa mô hình
+        loss = self.optimize_model(batch_size)
+        
+        # Cập nhật mạng mục tiêu sau mỗi số bước nhất định
+        if self.steps_done % self.config['target_update_freq'] == 0:
+            self.update_target_network()
+            
+        # Cập nhật epsilon
+        self.update_epsilon()
+        
+        return loss
+
     def select_action(self, state: np.ndarray = None) -> int:
         """
         Chọn hành động dựa trên trạng thái hiện tại
@@ -236,8 +335,33 @@ class ShardDQNAgent:
                 # tạo một trạng thái mặc định
                 state = np.zeros(self.state_size)
         
-        # Chuyển đổi state sang tensor
-        state = torch.FloatTensor(state).to(self.device)
+        # Chuyển đổi state thành numpy array nếu nó là list
+        if isinstance(state, list):
+            state = np.array(state, dtype=np.float32)
+        
+        # Đảm bảo state có kích thước đúng
+        if not hasattr(state, 'shape'):
+            print(f"Cảnh báo: State không có thuộc tính shape. Loại: {type(state)}")
+            # Chuyển đổi thành numpy array
+            state = np.array(state, dtype=np.float32)
+            
+        if state.shape[0] != self.state_size:
+            print(f"Cảnh báo: Kích thước state không khớp. Nhận được {state.shape[0]}, cần {self.state_size}")
+            # Điều chỉnh kích thước state
+            if state.shape[0] < self.state_size:
+                # Nếu state nhỏ hơn, thêm các giá trị 0
+                padded_state = np.zeros(self.state_size)
+                padded_state[:state.shape[0]] = state
+                state = padded_state
+            else:
+                # Nếu state lớn hơn, cắt bớt
+                state = state[:self.state_size]
+        
+        # Chuyển đổi state sang tensor và thêm batch dimension
+        state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+        
+        # Lưu trạng thái hiện tại cho các cập nhật trong tương lai
+        self.current_state = state
         
         # Quyết định xem có thực hiện khám phá hay không
         sample = random.random()
@@ -251,13 +375,29 @@ class ShardDQNAgent:
         
         self.steps_done += 1
         
-        if sample > eps_threshold:
+        # Lựa chọn hành động
+        if sample > eps_threshold and not self.is_training:
+            # Khi đánh giá, không sử dụng khám phá ngẫu nhiên
             with torch.no_grad():
-                # Chọn hành động tối ưu theo mô hình
-                return self.policy_net(state).max(0)[1].view(1, 1).item()
+                action = self.policy_net(state_tensor).max(1)[1].item()
+        elif sample > eps_threshold:
+            # Trong quá trình huấn luyện, sử dụng mô hình để chọn
+            with torch.no_grad():
+                action = self.policy_net(state_tensor).max(1)[1].item()
         else:
             # Chọn hành động ngẫu nhiên
-            return random.randrange(self.action_size)
+            action = random.randrange(self.action_size)
+        
+        # Lưu hành động cuối cùng
+        self.last_action = action
+        self.episode_actions.append(action)
+        
+        # Cập nhật trải nghiệm đang chờ
+        if self.current_state is not None and self.last_action is not None:
+            # Tạo trải nghiệm chờ (state, action, reward=0, next_state=None, done=False)
+            self.pending_experience = (self.current_state, self.last_action, 0, None, False)
+        
+        return action
         
     def update_epsilon(self) -> None:
         """
@@ -273,53 +413,122 @@ class ShardDQNAgent:
         Cập nhật mô hình từ bộ nhớ
         
         Args:
-            batch_size: Kích thước batch
+            batch_size: Số lượng mẫu để xử lý
             
         Returns:
-            Giá trị hàm mất mát
+            Giá trị loss
         """
+        # Kiểm tra xem bộ nhớ có đủ mẫu không
         if len(self.memory) < batch_size:
             return 0.0
-            
-        # Lấy batch ngẫu nhiên từ bộ nhớ
-        states, actions, rewards, next_states, dones = self.memory.sample(batch_size)
         
-        # Chuyển đổi thành tensor PyTorch
-        state_batch = torch.FloatTensor(states).to(self.device)
-        action_batch = torch.LongTensor(actions).unsqueeze(1).to(self.device)
-        reward_batch = torch.FloatTensor(rewards).to(self.device)
-        next_state_batch = torch.FloatTensor(next_states).to(self.device)
-        done_batch = torch.FloatTensor(dones).to(self.device)
+        # Lấy mẫu ngẫu nhiên từ bộ nhớ
+        transitions = self.memory.sample(batch_size)
         
-        # Tính giá trị Q cho hành động đã thực hiện
-        q_values = self.policy_net(state_batch).gather(1, action_batch)
+        # Chuyển đổi batch thành các tensor riêng biệt
+        batch = Transition(*zip(*transitions))
+        
+        # Tạo mask cho các trạng thái không phải kết thúc
+        non_final_mask = torch.tensor(
+            tuple(map(lambda s: s is not None, batch.next_state)),
+            device=self.device, 
+            dtype=torch.bool
+        )
+        
+        # Đếm số lượng trạng thái tiếp theo không phải kết thúc
+        non_final_count = non_final_mask.sum().item()
+        
+        # Nếu không có trạng thái tiếp theo nào, trả về 0
+        if non_final_count == 0:
+            return 0.0
+        
+        # Lọc các trạng thái tiếp theo không phải kết thúc
+        non_final_next_states = torch.FloatTensor(
+            [s for s in batch.next_state if s is not None]
+        ).to(self.device)
+        
+        # Đảm bảo kích thước đúng cho các tensor
+        state_batch = torch.FloatTensor([s for s in batch.state]).to(self.device)
+        action_batch = torch.LongTensor([a for a in batch.action]).to(self.device)
+        reward_batch = torch.FloatTensor([r for r in batch.reward]).to(self.device)
+        
+        # Tính Q-values cho các hành động đã thực hiện
+        state_action_values = self.policy_net(state_batch).gather(1, action_batch.unsqueeze(1))
+        
+        # Tính giá trị Q cho trạng thái tiếp theo
+        next_state_values = torch.zeros(batch_size, device=self.device)
+        
+        # Sử dụng Double DQN để giảm thiểu overestimation bias
+        if self.config.get("use_double_dqn", False) and non_final_count > 0:
+            # Chọn hành động từ policy network
+            with torch.no_grad():
+                next_action_indices = self.policy_net(non_final_next_states).max(1)[1].unsqueeze(1)
+                # Đánh giá giá trị từ target network
+                next_state_values[non_final_mask] = self.target_net(non_final_next_states).gather(1, next_action_indices).squeeze(1)
+        elif non_final_count > 0:
+            # Vanilla DQN
+            with torch.no_grad():
+                next_state_values[non_final_mask] = self.target_net(non_final_next_states).max(1)[0]
         
         # Tính giá trị Q mục tiêu
-        next_q_values = self.target_net(next_state_batch).max(1)[0].detach()
-        expected_q_values = reward_batch + (1 - done_batch) * self.gamma * next_q_values
+        expected_state_action_values = (next_state_values * self.gamma) + reward_batch
         
-        # Tính hàm mất mát
-        loss = F.smooth_l1_loss(q_values, expected_q_values.unsqueeze(1))
+        # Tính loss
+        if self.config.get("use_huber_loss", True):
+            # Huber loss cho robust learning
+            loss = F.smooth_l1_loss(state_action_values, expected_state_action_values.unsqueeze(1))
+        else:
+            # MSE loss
+            loss = F.mse_loss(state_action_values, expected_state_action_values.unsqueeze(1))
         
         # Tối ưu hóa mô hình
         self.optimizer.zero_grad()
         loss.backward()
         
-        # Clip gradient để tránh bùng nổ gradient
-        for param in self.policy_net.parameters():
-            param.grad.data.clamp_(-1, 1)
-            
+        # Gradient clipping để tránh exploding gradients
+        if self.config.get("use_gradient_clipping", True):
+            torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), self.config.get("gradient_clip_value", 1.0))
+        
         self.optimizer.step()
         
-        # Lưu thông tin huấn luyện
+        # Lưu giá trị loss
         loss_value = loss.item()
         self.training_info['losses'].append(loss_value)
         
         return loss_value
         
-    def update_target_network(self) -> None:
+    def add_experience(self, state, action, reward, next_state, done):
         """
-        Cập nhật mạng mục tiêu từ mạng chính
+        Thêm trải nghiệm vào bộ nhớ replay
+        
+        Args:
+            state: Trạng thái hiện tại
+            action: Hành động đã thực hiện
+            reward: Phần thưởng nhận được
+            next_state: Trạng thái tiếp theo
+            done: Cờ đánh dấu kết thúc episode
+        """
+        # Chuyển next_state thành None nếu episode kết thúc
+        if done:
+            next_state = None
+            
+        # Thêm vào bộ nhớ
+        self.memory.push(state, action, reward, next_state, done)
+        
+        # Cập nhật thông tin huấn luyện
+        self.training_info['rewards'].append(reward)
+        
+        # Nếu episode kết thúc, cập nhật thông tin episode
+        if done:
+            self.training_info['episodes'] += 1
+            self.training_info['episode_lengths'].append(len(self.episode_actions))
+            # Reset các biến theo dõi episode
+            self.accumulated_reward = 0.0
+            self.episode_actions = []
+            
+    def update_target_network(self):
+        """
+        Cập nhật mạng mục tiêu từ mạng chính sách
         """
         self.target_net.load_state_dict(self.policy_net.state_dict())
         
@@ -354,51 +563,6 @@ class ShardDQNAgent:
         self.epsilon = checkpoint['epsilon']
         self.training_info = checkpoint['training_info']
         
-    def add_experience(self, state: np.ndarray, action: int, reward: float, 
-                      next_state: np.ndarray, done: bool) -> None:
-        """
-        Thêm trải nghiệm vào bộ nhớ
-        
-        Args:
-            state: Trạng thái hiện tại
-            action: Hành động đã thực hiện
-            reward: Phần thưởng nhận được
-            next_state: Trạng thái tiếp theo
-            done: Cờ đánh dấu kết thúc
-        """
-        self.memory.add(state, action, reward, next_state, done)
-        
-    def update(self, state: np.ndarray, action: int, reward: float, 
-              next_state: np.ndarray, done: bool) -> float:
-        """
-        Cập nhật agent với trải nghiệm mới
-        
-        Args:
-            state: Trạng thái hiện tại
-            action: Hành động đã thực hiện
-            reward: Phần thưởng nhận được
-            next_state: Trạng thái tiếp theo
-            done: Trạng thái kết thúc
-            
-        Returns:
-            Giá trị loss của lần cập nhật này
-        """
-        # Thêm trải nghiệm vào bộ nhớ
-        self.add_experience(state, action, reward, next_state, done)
-        
-        # Cập nhật epsilon
-        self.update_epsilon()
-        
-        # Tối ưu hóa mô hình
-        loss = self.optimize_model(self.config['batch_size'])
-        
-        # Cập nhật mạng mục tiêu
-        self.steps_done += 1
-        if self.steps_done % self.config['target_update_freq'] == 0:
-            self.update_target_network()
-            
-        return loss
-        
     def get_model_parameters(self) -> Dict[str, torch.Tensor]:
         """
         Lấy tham số của mô hình để chia sẻ trong quá trình học liên kết
@@ -428,34 +592,60 @@ class ShardDQNAgent:
         self.policy_net.load_state_dict(to_load, strict=False)
         self.update_target_network()
         
-    def reset(self) -> None:
+    def reset(self):
         """
-        Đặt lại trạng thái của agent, bao gồm epsilon và bộ nhớ
+        Đặt lại trạng thái của tác tử
         """
-        # Đặt lại epsilon
-        self.epsilon = self.config["epsilon_start"]
+        # Đặt lại epsilon về giá trị ban đầu
+        self.epsilon = self.epsilon_start
         
-        # Đặt lại bộ nhớ lưu lại trải nghiệm
-        self.memory = ReplayBuffer(self.config["replay_buffer_size"])
+        # Đặt lại các biến theo dõi
+        self.current_state = None
+        self.last_action = None
+        self.pending_reward = 0.0
+        self.pending_experience = None
+        self.accumulated_reward = 0.0
+        self.episode_actions = []
         
-        # Khởi tạo lại mạng nơ-ron
-        self.policy_net = DQNNetwork(
-            self.state_size, 
-            self.action_size, 
-            self.config["local_network_architecture"]
-        ).to(self.device)
+        # Đặt lại thông tin huấn luyện
+        self.training_info = {
+            'episodes': 0,
+            'rewards': [],
+            'losses': [],
+            'episode_lengths': []
+        }
         
-        self.target_net = DQNNetwork(
-            self.state_size, 
-            self.action_size, 
-            self.config["local_network_architecture"]
-        ).to(self.device)
-        
-        # Khởi tạo mạng mục tiêu với cùng tham số
-        self.update_target_network()
-        
-        # Đặt lại bộ đếm bước
+        # Đặt lại bước thực hiện
         self.steps_done = 0
+
+    def update(self, state, action, reward, next_state, done):
+        """
+        Cập nhật tác tử với trải nghiệm mới
+        
+        Args:
+            state: Trạng thái hiện tại
+            action: Hành động đã thực hiện
+            reward: Phần thưởng nhận được
+            next_state: Trạng thái tiếp theo
+            done: Cờ đánh dấu kết thúc episode
+            
+        Returns:
+            Giá trị loss từ quá trình cập nhật
+        """
+        # Thêm trải nghiệm vào bộ nhớ
+        self.add_experience(state, action, reward, next_state, done)
+        
+        # Cập nhật epsilon
+        self.update_epsilon()
+        
+        # Tối ưu hóa mô hình
+        loss = self.optimize_model(self.config['batch_size'])
+        
+        # Cập nhật mạng mục tiêu sau mỗi số bước nhất định
+        if self.steps_done % self.config['target_update_freq'] == 0:
+            self.update_target_network()
+            
+        return loss
 
 
 class MultiAgentDQNController:

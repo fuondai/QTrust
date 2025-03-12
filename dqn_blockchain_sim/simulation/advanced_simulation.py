@@ -450,7 +450,7 @@ class AdvancedSimulation:
             return
         
         # Tính toán công suất xử lý dựa trên hiệu suất shard
-        base_process_count = 3
+        base_process_count = 5  # Tăng từ 3 lên 5 để xử lý nhiều giao dịch hơn
         processing_capacity = int(base_process_count * shard.performance * boost_factor)
         
         # Lấy danh sách giao dịch để xử lý
@@ -464,10 +464,28 @@ class AdvancedSimulation:
             print("MAD-RAPID chưa được khởi tạo, đang khởi tạo...")
             self.integrate_mad_rapid()
         
+        # Kiểm tra xem ACSC đã được khởi tạo chưa
+        if not hasattr(self, 'acsc') or self.acsc is None:
+            print("ACSC chưa được khởi tạo, đang khởi tạo...")
+            self.integrate_acsc()
+        
+        # Đảm bảo HTDCM đã được khởi tạo
+        if not hasattr(self, 'htdcm') or self.htdcm is None:
+            print("HTDCM chưa được khởi tạo, đang khởi tạo...")
+            self.integrate_htdcm()
+        
+        # Cập nhật điểm tin cậy trước khi xử lý giao dịch
+        try:
+            self.htdcm.update_trust_scores()
+            print(f"Đã cập nhật điểm tin cậy cho {len(self.htdcm.trust_scores)} node")
+        except Exception as e:
+            print(f"Lỗi khi cập nhật điểm tin cậy: {e}")
+        
         print(f"Đang xử lý {len(transactions_to_process)} giao dịch xuyên shard cho shard {shard.shard_id}")
         
-        # Xử lý từng giao dịch sử dụng MAD-RAPID
+        # Xử lý từng giao dịch
         mad_rapid_success_count = 0
+        acsc_success_count = 0
         
         for tx in transactions_to_process:
             # Tăng số lượng giao dịch xuyên shard
@@ -480,18 +498,72 @@ class AdvancedSimulation:
             if not hasattr(tx, 'is_cross_shard'):
                 tx.is_cross_shard = True
             
-            # Sử dụng MAD-RAPID để xử lý giao dịch
-            print(f"Sử dụng MAD-RAPID để xử lý giao dịch {getattr(tx, 'transaction_id', str(id(tx)))}")
-            is_successful = self.mad_rapid.process_cross_shard_transaction(tx)
+            # Quyết định phương pháp xử lý dựa trên giá trị giao dịch và độ tin cậy
+            # Sử dụng DQN Agent để quyết định nếu có thể
+            use_acsc = False
+            
+            # Sử dụng DQN nếu đã được kích hoạt
+            if hasattr(self, 'use_dqn') and self.use_dqn and shard.shard_id in self.dqn_agents:
+                # Lấy đặc trưng trạng thái
+                tx_value = getattr(tx, 'value', 0)
+                cross_shard_level = shard.cross_shard_tx_count / max(1, len(transactions_to_process)) 
+                congestion_level = len(shard.cross_shard_queue) / max(10, processing_capacity)
+                
+                # Tạo vector trạng thái
+                state = np.array([tx_value, cross_shard_level, congestion_level])
+                
+                # Dự đoán hành động (0: MAD-RAPID, 1: ACSC)
+                action = self.dqn_agents[shard.shard_id].predict(state)
+                use_acsc = (action == 1)
+                
+                # Cập nhật trạng thái DQN
+                if hasattr(self.dqn_agents[shard.shard_id], 'current_state'):
+                    self.dqn_agents[shard.shard_id].current_state = state
+            else:
+                # Nếu không có DQN, quyết định dựa trên heuristic
+                tx_value = getattr(tx, 'value', 0)
+                target_shard = getattr(tx, 'target_shard', 0)
+                
+                # Kiểm tra độ tin cậy giữa các shard
+                trust_level = self.htdcm.get_trust_between_shards(shard.shard_id, target_shard) if hasattr(self.htdcm, 'get_trust_between_shards') else 0.5
+                
+                # Sử dụng ACSC cho giao dịch có giá trị cao và độ tin cậy thấp
+                use_acsc = (tx_value > 100 and trust_level < 0.7)
+            
+            is_successful = False
+            
+            if use_acsc:
+                print(f"Sử dụng ACSC để xử lý giao dịch {getattr(tx, 'transaction_id', str(id(tx)))}")
+                try:
+                    # Xử lý bằng ACSC
+                    is_successful, details = self.acsc.process_cross_shard_transaction(
+                        transaction=tx,
+                        source_shard_id=shard.shard_id,
+                        target_shard_id=getattr(tx, 'target_shard', 0),
+                        network=self.network
+                    )
+                    
+                    # Cập nhật thống kê
+                    if is_successful:
+                        acsc_success_count += 1
+                except Exception as e:
+                    print(f"Lỗi khi xử lý giao dịch bằng ACSC: {e}")
+                    # Thử lại với MAD-RAPID nếu ACSC thất bại
+                    is_successful = self.mad_rapid.process_cross_shard_transaction(tx)
+                    if is_successful:
+                        mad_rapid_success_count += 1
+            else:
+                # Sử dụng MAD-RAPID
+                print(f"Sử dụng MAD-RAPID để xử lý giao dịch {getattr(tx, 'transaction_id', str(id(tx)))}")
+                is_successful = self.mad_rapid.process_cross_shard_transaction(tx)
+                if is_successful:
+                    mad_rapid_success_count += 1
             
             # Tính toán gas và phí
             gas_used = getattr(tx, 'gas_limit', 21000) * 1.5  # Giao dịch xuyên shard tiêu thụ gas cao hơn
             fee = getattr(tx, 'gas_price', 1.0) * gas_used
             
             if is_successful:
-                # Đánh dấu thành công bởi MAD-RAPID
-                mad_rapid_success_count += 1
-                
                 # Cập nhật số liệu cho giao dịch thành công
                 shard.successful_cs_tx_count += 1
                 self.successful_transactions += 1
@@ -499,66 +571,35 @@ class AdvancedSimulation:
                 # Thêm vào từ điển giao dịch đã xử lý
                 tx_id = getattr(tx, 'transaction_id', str(id(tx)))
                 shard.processed_transactions[tx_id] = tx
-                if isinstance(shard.confirmed_transactions, dict):
-                    shard.confirmed_transactions[tx_id] = tx
-                else:
-                    shard.confirmed_transactions = {tx_id: tx}
-                    
-                # Cập nhật các biến thống kê
-                if hasattr(shard, 'throughput'):
-                    shard.throughput += 1
-                else:
-                    shard.throughput = 1
-                    
-                if hasattr(shard, 'total_gas_used'):
-                    shard.total_gas_used += gas_used
-                else:
-                    shard.total_gas_used = gas_used
-                    
-                if hasattr(shard, 'total_fees'):
-                    shard.total_fees += fee
-                else:
-                    shard.total_fees = fee
-                    
-                # Thêm giao dịch vào transaction_data
-                tx.status = "processed"
-                self.transaction_data[tx_id] = {
-                    'status': 'processed',
-                    'is_cross_shard': True,
-                    'source_shard': tx.source_shard,
-                    'target_shard': tx.target_shard,
-                    'timestamp': time.time(),
-                    'size': getattr(tx, 'size', 1024),
-                    'value': getattr(tx, 'value', 0.0),
-                    'gas_limit': getattr(tx, 'gas_limit', 21000),
-                    'gas_price': getattr(tx, 'gas_price', 1.0),
-                    'optimized': hasattr(tx, 'optimized_path')
-                }
+                
+                # Cập nhật thưởng cho node
+                validator_reward = fee * 0.7  # 70% phí cho validator
+                
+                # Thưởng cho DQN nếu đã sử dụng và dự đoán đúng
+                if hasattr(self, 'use_dqn') and self.use_dqn and shard.shard_id in self.dqn_agents:
+                    if (use_acsc and is_successful) or (not use_acsc and is_successful):
+                        # DQN đã dự đoán đúng, thưởng cho nó
+                        if hasattr(self.dqn_agents[shard.shard_id], 'reward'):
+                            self.dqn_agents[shard.shard_id].reward(1.0)  # Thưởng tích cực
             else:
-                # Xử lý trường hợp giao dịch thất bại
-                tx.status = "failed"
+                # Giao dịch thất bại
                 tx_id = getattr(tx, 'transaction_id', str(id(tx)))
                 shard.failed_transactions[tx_id] = tx
-                if isinstance(shard.rejected_transactions, dict):
-                    shard.rejected_transactions[tx_id] = tx
-                else:
-                    shard.rejected_transactions = {tx_id: tx}
-                    
-                # Thêm giao dịch vào transaction_data với trạng thái failed
-                self.transaction_data[tx_id] = {
-                    'status': 'failed',
-                    'is_cross_shard': True,
-                    'source_shard': tx.source_shard,
-                    'target_shard': tx.target_shard,
-                    'timestamp': time.time(),
-                    'size': getattr(tx, 'size', 1024),
-                    'value': getattr(tx, 'value', 0.0),
-                    'gas_limit': getattr(tx, 'gas_limit', 21000),
-                    'gas_price': getattr(tx, 'gas_price', 1.0),
-                    'optimized': False
-                }
+                
+                # Phạt cho DQN nếu đã sử dụng và dự đoán sai
+                if hasattr(self, 'use_dqn') and self.use_dqn and shard.shard_id in self.dqn_agents:
+                    if hasattr(self.dqn_agents[shard.shard_id], 'reward'):
+                        self.dqn_agents[shard.shard_id].reward(-0.5)  # Phạt nhẹ
         
-        print(f"Đã xử lý {len(transactions_to_process)} giao dịch xuyên shard, thành công: {mad_rapid_success_count}")
+        # Huấn luyện DQN sau mỗi batch giao dịch
+        if hasattr(self, 'use_dqn') and self.use_dqn:
+            for agent_id, agent in self.dqn_agents.items():
+                if hasattr(agent, 'train'):
+                    agent.train()
+        
+        print(f"MAD-RAPID đã xử lý thành công {mad_rapid_success_count}/{len(transactions_to_process)} giao dịch")
+        print(f"ACSC đã xử lý thành công {acsc_success_count}/{len(transactions_to_process)} giao dịch")
+        print(f"Tổng số giao dịch thành công: {mad_rapid_success_count + acsc_success_count}/{len(transactions_to_process)}")
     
     def _calculate_reward(self, shard) -> float:
         """
@@ -1117,6 +1158,45 @@ class AdvancedSimulation:
         print(f"Số shard trong MAD-RAPID: {self.mad_rapid.num_shards}")
         
         # Khởi tạo các thuộc tính cần thiết cho các shard
+        if not hasattr(self.mad_rapid, 'shard_states'):
+            self.mad_rapid.shard_states = {}
+        
+        if not hasattr(self.mad_rapid, 'shard_agents'):
+            self.mad_rapid.shard_agents = {}
+            
+        # Khởi tạo DQN agents cho mỗi shard nếu chưa có
+        if self.use_dqn and (not hasattr(self.mad_rapid, 'dqn_agents') or not self.mad_rapid.dqn_agents):
+            from dqn_blockchain_sim.agents.dqn_agent import ShardDQNAgent
+            
+            # Khởi tạo DQN agents cho mỗi shard
+            self.mad_rapid.dqn_agents = {}
+            for shard_id in range(self.num_shards):
+                # Khởi tạo agent với state_size=8 (đặc trưng shard) và action_size=3 (các hành động tối ưu)
+                agent = ShardDQNAgent(
+                    shard_id=shard_id,
+                    state_size=8,
+                    action_size=3
+                )
+                # Gán shard cho agent
+                if shard_id < len(self.network.shards):
+                    agent.shard = self.network.shards[shard_id]
+                
+                # Lưu agent vào danh sách
+                self.mad_rapid.dqn_agents[shard_id] = agent
+                
+            print(f"Đã khởi tạo {len(self.mad_rapid.dqn_agents)} DQN agents cho MAD-RAPID")
+            
+        # Khởi tạo các thuộc tính theo dõi hiệu suất
+        if not hasattr(self.mad_rapid, 'transaction_history'):
+            self.mad_rapid.transaction_history = []
+            
+        if not hasattr(self.mad_rapid, 'optimization_history'):
+            self.mad_rapid.optimization_history = []
+            
+        if not hasattr(self.mad_rapid, 'cross_shard_success_count'):
+            self.mad_rapid.cross_shard_success_count = 0
+        
+        # Khởi tạo các thuộc tính cần thiết cho các shard
         for shard_id, shard in self.network.shards.items():
             # Đảm bảo rằng mỗi shard có các thuộc tính cần thiết
             for attr in ['transaction_queue', 'cross_shard_queue', 'processed_transactions',
@@ -1151,8 +1231,8 @@ class AdvancedSimulation:
             
             # Gán phương thức mới
             shard.process_cross_shard_transaction = mad_rapid_process_tx
-        
-        print("Đã kết nối MAD-RAPID với mạng blockchain thành công.")
+            
+        print("Đã kết nối MAD-RAPID với mạng blockchain thành công!")
 
 
 def run_advanced_simulation(args):

@@ -615,15 +615,40 @@ class TrustManager:
         # Thu thập dữ liệu mạng
         network_data = self._collect_network_data()
         
+        # Đảm bảo khởi tạo cấu trúc dữ liệu cần thiết
+        if not hasattr(self, 'node_reliability'):
+            self.node_reliability = {}
+        
+        if not hasattr(self, 'shard_reliability'):
+            self.shard_reliability = {}
+            
+        if not hasattr(self, 'cross_shard_trust'):
+            self.cross_shard_trust = {}
+            
+        if not hasattr(self, 'trust_violations'):
+            self.trust_violations = 0
+        
         # Cập nhật điểm tin cậy cho từng nút
         for node_id, node_info in self.nodes.items():
             # Tạo metrics từ dữ liệu mạng
             metrics = {
                 "uptime": node_info.get("uptime", 1.0),
-                "performance": node_info.get("compute_power", 0.5),
-                "security_incidents": 0,
-                "energy_efficiency": node_info.get("energy_efficiency", 0.7)
+                "performance": node_info.get("compute_power", 0.5) * (1.0 + random.uniform(-0.1, 0.1)),  # Thêm một chút nhiễu
+                "security_incidents": network_data.get(node_id, {}).get("security_incidents", 0),
+                "energy_efficiency": node_info.get("energy_efficiency", 0.7) * (1.0 + random.uniform(-0.05, 0.05)),
+                "successful_validations": network_data.get(node_id, {}).get("successful_validations", 10),
+                "failed_validations": network_data.get(node_id, {}).get("failed_validations", 0),
+                "latency": network_data.get(node_id, {}).get("latency", 50) / 1000  # chuyển từ ms sang giây
             }
+            
+            # Cập nhật độ tin cậy của node dựa trên hoạt động của nó
+            if metrics["successful_validations"] + metrics["failed_validations"] > 0:
+                reliability = metrics["successful_validations"] / (metrics["successful_validations"] + metrics["failed_validations"])
+                self.node_reliability[node_id] = reliability
+                
+                # Phát hiện vi phạm độ tin cậy
+                if reliability < 0.5 and metrics["failed_validations"] > 5:
+                    self.trust_violations += 1
             
             # Cập nhật điểm tin cậy
             self.update_node_metrics(node_id, metrics)
@@ -638,3 +663,115 @@ class TrustManager:
                 if shard_nodes:
                     avg_score = sum(self.trust_scores.get(n, 0.5) for n in shard_nodes) / len(shard_nodes)
                     self.trust_scores[shard_id] = avg_score
+                    
+                    # Tính độ tin cậy của shard dựa trên hiệu suất và số giao dịch thành công
+                    shard = self.network.shards[shard_id]
+                    success_rate = getattr(shard, 'successful_cs_tx_count', 0) / max(1, getattr(shard, 'cross_shard_tx_count', 1))
+                    reliability = (avg_score + success_rate) / 2  # Kết hợp độ tin cậy của nodes và tỷ lệ thành công
+                    self.shard_reliability[shard_id] = reliability
+        
+            # Tính điểm tin cậy giữa các cặp shard
+            self._update_cross_shard_trust()
+
+    def _update_cross_shard_trust(self):
+        """
+        Cập nhật ma trận độ tin cậy giữa các cặp shard
+        """
+        if not self.network or not hasattr(self.network, 'shards'):
+            return
+            
+        # Khởi tạo ma trận độ tin cậy
+        for i in self.network.shards:
+            if i not in self.cross_shard_trust:
+                self.cross_shard_trust[i] = {}
+                
+            for j in self.network.shards:
+                if i == j:
+                    # Độ tin cậy trong cùng một shard luôn cao
+                    self.cross_shard_trust[i][j] = 1.0
+                elif j not in self.cross_shard_trust[i]:
+                    # Khởi tạo với giá trị mặc định
+                    self.cross_shard_trust[i][j] = 0.7
+        
+        # Cập nhật ma trận độ tin cậy dựa trên dữ liệu lịch sử giao dịch
+        for i in self.network.shards:
+            for j in self.network.shards:
+                if i == j:
+                    continue
+                    
+                # Lấy dữ liệu từ hai shard
+                shard_i = self.network.shards[i]
+                shard_j = self.network.shards[j]
+                
+                # Đánh giá độ tin cậy dựa trên số lượng giao dịch thành công và thất bại
+                successful_tx = 0
+                failed_tx = 0
+                
+                # Lấy giao dịch từ shard i đến shard j
+                if hasattr(shard_i, 'processed_transactions') and hasattr(shard_i, 'failed_transactions'):
+                    for tx_id, tx in getattr(shard_i, 'processed_transactions', {}).items():
+                        if hasattr(tx, 'target_shard') and tx.target_shard == j:
+                            successful_tx += 1
+                            
+                    for tx_id, tx in getattr(shard_i, 'failed_transactions', {}).items():
+                        if hasattr(tx, 'target_shard') and tx.target_shard == j:
+                            failed_tx += 1
+                
+                # Tính độ tin cậy mới
+                if successful_tx + failed_tx > 0:
+                    trust_ij = successful_tx / (successful_tx + failed_tx)
+                    # Cập nhật với decay rate để giữ lại một phần thông tin cũ
+                    decay_rate = 0.3
+                    self.cross_shard_trust[i][j] = (1 - decay_rate) * self.cross_shard_trust[i][j] + decay_rate * trust_ij
+                    
+                    # Đảm bảo tính đối xứng một phần
+                    if j in self.cross_shard_trust and i in self.cross_shard_trust[j]:
+                        trust_ji = self.cross_shard_trust[j][i]
+                        # Cập nhật trust_ji dựa một phần vào trust_ij
+                        self.cross_shard_trust[j][i] = 0.8 * trust_ji + 0.2 * trust_ij
+
+    def get_trust_between_shards(self, source_shard_id, target_shard_id):
+        """
+        Lấy mức độ tin cậy giữa hai shard
+        
+        Args:
+            source_shard_id: ID của shard nguồn
+            target_shard_id: ID của shard đích
+            
+        Returns:
+            float: Mức độ tin cậy trong khoảng [0, 1]
+        """
+        if not hasattr(self, 'cross_shard_trust'):
+            self._update_cross_shard_trust()
+            
+        if source_shard_id in self.cross_shard_trust and target_shard_id in self.cross_shard_trust[source_shard_id]:
+            return self.cross_shard_trust[source_shard_id][target_shard_id]
+        
+        # Giá trị mặc định cho trường hợp chưa có dữ liệu
+        return 0.7
+        
+    def get_statistics(self) -> Dict[str, Any]:
+        """
+        Trả về thống kê về quản lý tin cậy
+        
+        Returns:
+            Dict: Thống kê về quản lý tin cậy
+        """
+        stats = super().get_statistics() if hasattr(super(), 'get_statistics') else {}
+        
+        # Thống kê tổng quát
+        stats.update({
+            "total_nodes": len(self.nodes),
+            "avg_trust_score": sum(self.trust_scores.values()) / max(1, len(self.trust_scores)),
+            "min_trust_score": min(self.trust_scores.values()) if self.trust_scores else 0,
+            "max_trust_score": max(self.trust_scores.values()) if self.trust_scores else 0,
+            "trust_violations_detected": getattr(self, 'trust_violations', 0),
+            "shard_reliability": getattr(self, 'shard_reliability', {}),
+            "transaction_security_level": {
+                "high": len([s for s in getattr(self, 'shard_reliability', {}).values() if s > 0.8]),
+                "medium": len([s for s in getattr(self, 'shard_reliability', {}).values() if 0.5 <= s <= 0.8]),
+                "low": len([s for s in getattr(self, 'shard_reliability', {}).values() if s < 0.5]),
+            }
+        })
+        
+        return stats
