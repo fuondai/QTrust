@@ -1,5 +1,0 @@
-protocol,throughput,latency,success_rate,energy_consumption
-pow,0,0,0,0.0
-pos,0,0,0,0.0
-pbft,0,0,0,0.0
-acsc,0,0,0,0.0

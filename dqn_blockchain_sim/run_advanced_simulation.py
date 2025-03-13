@@ -80,9 +80,13 @@ def main():
     
     # Display summary results
     print("\n===== SIMULATION RESULTS =====")
-    print(f"Total transactions: {results['transaction_stats']['total_transactions']}")
-    print(f"Successful transactions: {results['transaction_stats']['successful_transactions']}")
-    print(f"Success rate: {results['transaction_stats']['success_rate']:.2%}")
+    if 'transaction_stats' in results and isinstance(results['transaction_stats'], dict):
+        tx_stats = results['transaction_stats']
+        print(f"Total transactions: {tx_stats.get('total_transactions', 'N/A')}")
+        print(f"Successful transactions: {tx_stats.get('successful_transactions', 'N/A')}")
+        print(f"Success rate: {tx_stats.get('success_rate', 0):.2%}")
+    else:
+        print("Không có thống kê giao dịch chi tiết")
     
     if 'performance_metrics' in results:
         metrics = results['performance_metrics']

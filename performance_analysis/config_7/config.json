@@ -1,7 +1,0 @@
-{
-  "name": "dqn_analysis_without",
-  "num_shards": 8,
-  "num_steps": 100,
-  "tx_per_step": 20,
-  "use_dqn": false
-}
