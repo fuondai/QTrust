@@ -52,6 +52,7 @@ class Shard:
         self.rejected_count = 0
         self.total_gas_used = 0
         self.total_fees = 0.0
+        self.cross_shard_tx_count = 0  # Số lượng giao dịch cross-shard đã xử lý
         
     def add_node(self, node_name: str) -> bool:
         """

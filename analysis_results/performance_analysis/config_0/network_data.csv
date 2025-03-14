@@ -1,5 +1,0 @@
-shard_id,num_nodes,throughput,congestion_level,avg_latency,energy_consumption,num_processed_tx,num_failed_tx
-0,10,0,0.18,95.0,0.0,46,0
-1,10,0,0.12,80.0,0.0,42,0
-2,10,4,0.12,80.0,0.0,53,0
-3,10,4,0.1,75.0,0.0,33,0

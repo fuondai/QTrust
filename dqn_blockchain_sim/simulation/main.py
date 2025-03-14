@@ -59,8 +59,8 @@ class Simulation:
         # Khởi tạo bộ điều khiển DQN đa tác tử
         self.dqn_controller = MultiAgentDQNController(
             num_shards=BLOCKCHAIN_CONFIG["num_shards"],
-            state_dim=self.state_dim,
-            action_dim=self.action_dim,
+            state_size=self.state_dim,
+            action_size=self.action_dim,
             coordination_state_dim=self.global_state_dim,
             coordination_action_dim=self.global_action_dim,
             config=DQN_CONFIG

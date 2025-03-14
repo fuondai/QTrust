@@ -37,32 +37,40 @@ class TrustScoreCalculator:
             Điểm tin cậy (0-1)
         """
         if not node_metrics:
-            return 0.0
+            return 0.5  # Giá trị mặc định nếu không có metrics
             
         # Sử dụng thuật toán đánh giá tin cậy đa yếu tố
         score = 0.0
+        total_weight = 0.0
         
-        # 1. Thời gian hoạt động
-        if "uptime" in node_metrics:
-            uptime_score = min(1.0, node_metrics["uptime"])
-            score += self.trust_factors["uptime"] * uptime_score
+        # Lặp qua các yếu tố tin cậy được cấu hình
+        for factor, weight in self.trust_factors.items():
+            if factor == "uptime" and "uptime" in node_metrics:
+                uptime_score = min(1.0, node_metrics["uptime"])
+                score += weight * uptime_score
+                total_weight += weight
             
-        # 2. Hiệu suất
-        if "performance" in node_metrics:
-            perf_score = min(1.0, node_metrics["performance"])
-            score += self.trust_factors["performance"] * perf_score
+            elif factor == "performance" and "performance" in node_metrics:
+                perf_score = min(1.0, node_metrics["performance"])
+                score += weight * perf_score
+                total_weight += weight
+                
+            elif factor == "validation_accuracy" and "validation_accuracy" in node_metrics:
+                val_score = min(1.0, node_metrics["validation_accuracy"])
+                score += weight * val_score
+                total_weight += weight
+                
+            elif factor == "reputation" and "reputation" in node_metrics:
+                rep_score = min(1.0, node_metrics["reputation"])
+                score += weight * rep_score
+                total_weight += weight
+        
+        # Nếu không có yếu tố nào được tính, trả về giá trị mặc định
+        if total_weight == 0.0:
+            return 0.5
             
-        # 3. Các sự cố bảo mật
-        if "security_incidents" in node_metrics:
-            # Số sự cố cao -> điểm thấp
-            incident_count = node_metrics["security_incidents"]
-            security_score = max(0.0, 1.0 - min(1.0, incident_count / 10.0))
-            score += self.trust_factors["security_incidents"] * security_score
-            
-        # 4. Hiệu quả năng lượng
-        if "energy_efficiency" in node_metrics:
-            energy_score = min(1.0, node_metrics["energy_efficiency"])
-            score += self.trust_factors["energy_efficiency"] * energy_score
+        # Chuẩn hóa điểm theo tổng trọng số đã sử dụng
+        score = score / total_weight
             
         # Đảm bảo điểm tin cậy nằm trong khoảng [0, 1]
         score = max(0.0, min(1.0, score))
@@ -149,23 +157,41 @@ class TrustManager:
     Lớp quản lý tin cậy và lựa chọn nút
     """
     
-    def __init__(self, network=None, num_shards=None, config: Dict[str, Any] = None):
+    def __init__(self, num_shards=None, network=None, config=None):
         """
-        Khởi tạo trình quản lý tin cậy
+        Khởi tạo Trust Manager
         
         Args:
-            network: Đối tượng mạng blockchain
-            num_shards: Số lượng shard trong mạng
-            config: Cấu hình TDCM, sử dụng mặc định nếu không cung cấp
+            num_shards: Số lượng shard trong mạng hoặc cấu hình
+            network: Đối tượng mạng blockchain (tùy chọn)
+            config: Cấu hình của Trust Manager
         """
+        # Xử lý trường hợp đối số đầu tiên là config
+        if isinstance(num_shards, dict) and config is None:
+            config = num_shards
+            num_shards = None
+        
         self.config = config if config is not None else TDCM_CONFIG
         self.network = network
-        self.num_shards = num_shards if num_shards is not None else 8
+        
+        # Lấy số shard từ config nếu num_shards không được cung cấp
+        if num_shards is None:
+            # Thử lấy số shard từ config nếu có, mặc định là 8
+            if isinstance(self.config, dict) and 'num_shards' in self.config:
+                self.num_shards = self.config['num_shards']
+            else:
+                self.num_shards = 8
+        else:
+            self.num_shards = num_shards
         
         self.trust_calculator = TrustScoreCalculator(self.config)
+        
+        # Sử dụng reputation_decay hoặc giá trị mặc định nếu trust_decay_rate không tồn tại
+        decay_rate = self.config.get("trust_decay_rate", self.config.get("reputation_decay", 0.95))
+        
         self.trust_history = TrustHistory(
             max_history=100,
-            decay_rate=self.config["trust_decay_rate"]
+            decay_rate=decay_rate
         )
         
         self.nodes = {}  # Thông tin về các nút (node_id -> node_info)

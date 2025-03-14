@@ -7,9 +7,15 @@ Script kiểm tra các import trong dqn_blockchain_sim
 
 import sys
 import traceback
+import os
 
 def test_imports():
     """Kiểm tra các import chính"""
+    # In đường dẫn Python
+    print(f"Python version: {sys.version}")
+    print(f"Python executable: {sys.executable}")
+    print(f"Python path: {sys.path}")
+    
     # Import blockchain.network
     print("Import BlockchainNetwork từ blockchain.network...")
     try:
@@ -27,7 +33,7 @@ def test_imports():
     
     # Import các module tích hợp
     modules = [
-        ("dqn_blockchain_sim.blockchain.mad_rapid", "MAD_RAPID_Protocol"),
+        ("dqn_blockchain_sim.blockchain.mad_rapid", "MADRAPIDProtocol"),
         ("dqn_blockchain_sim.tdcm.hierarchical_trust", "HierarchicalTrustDCM"),
         ("dqn_blockchain_sim.blockchain.adaptive_consensus", "AdaptiveCrossShardConsensus"),
         ("dqn_blockchain_sim.utils.real_data_builder", "EthereumDataProcessor"),
@@ -54,5 +60,6 @@ def test_imports():
 
 if __name__ == "__main__":
     print(f"Python version: {sys.version}")
+    print(f"Python executable: {sys.executable}")
     print(f"Python path: {sys.path}")
     test_imports() 

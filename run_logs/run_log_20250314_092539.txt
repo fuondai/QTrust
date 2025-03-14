@@ -1,0 +1,16 @@
+Command: c:\users\dadad\appdata\local\programs\python\python310\python.exe -m dqn_blockchain_sim.run_advanced_simulation --num_shards 2 --steps 2 --tx_per_step 1 --save_stats
+Thời gian: 2025-03-14 09:25:39
+
+Traceback (most recent call last):
+  File "c:\users\dadad\appdata\local\programs\python\python310\lib\runpy.py", line 187, in _run_module_as_main
+    mod_name, mod_spec, code = _get_module_details(mod_name, _Error)
+  File "c:\users\dadad\appdata\local\programs\python\python310\lib\runpy.py", line 157, in _get_module_details
+    code = loader.get_code(mod_name)
+  File "<frozen importlib._bootstrap_external>", line 1017, in get_code
+  File "<frozen importlib._bootstrap_external>", line 947, in source_to_code
+  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+  File "C:\Users\dadad\Downloads\Playground\dqn_blockchain_sim\run_advanced_simulation.py", line 196
+    """
+SyntaxError: expected 'except' or 'finally' block
+
+Exit code: 1

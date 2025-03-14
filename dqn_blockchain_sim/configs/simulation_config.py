@@ -76,20 +76,18 @@ FL_CONFIG = {
 TDCM_CONFIG = {
     # Cấu hình tính điểm tin cậy
     "trust_factors": {
-        "uptime": 0.25,             # Trọng số cho thời gian hoạt động
-        "performance": 0.30,        # Trọng số cho hiệu suất
-        "security_incidents": 0.25, # Trọng số cho các sự cố bảo mật
-        "energy_efficiency": 0.20,  # Trọng số cho hiệu quả năng lượng
+        "uptime": 0.2,
+        "performance": 0.3,
+        "validation_accuracy": 0.4,
+        "reputation": 0.1
     },
-    
-    # Thông số cập nhật điểm tin cậy
-    "trust_update_frequency": 10,   # Tần suất cập nhật điểm tin cậy (giây)
-    "trust_decay_rate": 0.01,       # Tốc độ suy giảm điểm tin cậy
-    "trust_history_weight": 0.7,    # Trọng số lịch sử cho điểm tin cậy
-    
-    # Thông số lựa chọn
-    "selection_batch_size": 10,     # Số lượng nút được xem xét mỗi lần lựa chọn
-    "min_trust_threshold": 0.5,     # Ngưỡng tin cậy tối thiểu để được chọn
+    "performance_factors": {
+        "response_time": 0.5,
+        "throughput": 0.5
+    },
+    "validation_threshold": 0.7,
+    "trust_threshold": 0.6,
+    "reputation_decay": 0.95
 }
 
 # Cấu hình mô phỏng
@@ -114,4 +112,84 @@ SIMULATION_CONFIG = {
             "intensity": 0.2,
         },
     ],
+    "num_shards": 8,
+    "block_time": 10,  # Giây
+    "network_latency": 100,  # ms
+    "consensus_algorithm": "PoW",
+    "steps": 500,
+    "tx_per_step": 20,
+    "shard_capacity": 100,
+    "log_dir": "logs",
+    "data_dir": "data",
+    "visualize": True,
+    "save_stats": True,
+    "use_real_data": False,
+    "use_dqn": True
+}
+
+# Cấu hình MAD-RAPID
+MAD_RAPID_CONFIG = {
+    "predictor_input_size": 8,
+    "predictor_hidden_size": 128,
+    "predictor_num_layers": 2,
+    "optimizer_input_size": 16,
+    "optimizer_hidden_size": 128,
+    "use_dqn": True,
+    "dqn_state_size": 12,
+    "dqn_action_size": 3,
+    "dqn_batch_size": 64,
+    "dqn_gamma": 0.99,
+    "dqn_epsilon": 1.0,
+    "dqn_epsilon_min": 0.1,
+    "dqn_epsilon_decay": 0.995,
+    "dqn_learning_rate": 0.001,
+    "dqn_tau": 0.01,
+    "use_double_dqn": True,
+    "use_dueling_dqn": False,
+    "use_prioritized_replay": True,
+    
+    # Cấu hình Federated Learning
+    "use_federated_learning": True,
+    "fl_rounds": 5,
+    "fl_local_epochs": 2,
+    "fl_client_fraction": 0.8,
+    "fl_aggregation_method": "fedavg",
+    "fl_secure_aggregation": True
+}
+
+# Cấu hình ACSC
+ACSC_CONFIG = {
+    "default_strategy": "StandardPBFTConsensus",
+    "strategies": {
+        "FastBFTConsensus": {
+            "min_trust_score": 0.8,
+            "min_validators": 3,
+            "max_validators": 7
+        },
+        "StandardPBFTConsensus": {
+            "min_trust_score": 0.6,
+            "min_validators": 5,
+            "max_validators": 11
+        },
+        "RobustBFTConsensus": {
+            "min_trust_score": 0.4,
+            "min_validators": 7,
+            "max_validators": 15
+        }
+    },
+    "strategy_selection_window": 10,
+    "performance_weight": 0.6,
+    "security_weight": 0.4
+}
+
+# Cấu hình Federated Learning
+FEDERATED_LEARNING_CONFIG = {
+    "global_rounds": 5,
+    "local_epochs": 2,
+    "min_clients": 2,
+    "client_fraction": 0.8,
+    "aggregation_method": "fedavg",  # Một trong: "fedavg", "fedprox", "fedadam"
+    "secure_aggregation": True,
+    "privacy_budget": 1.0,  # Ngân sách điều chỉnh cho differential privacy
+    "model_saving_interval": 5  # Lưu mô hình sau mỗi bao nhiêu vòng
 } 

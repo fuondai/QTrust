@@ -44,6 +44,8 @@ class Shard:
         self.confirmed_transactions = 0
         self.rejected_transactions = 0
         self.cross_shard_transactions = 0
+        self.cross_shard_tx_count = 0  # Số lượng giao dịch cross-shard đã xử lý
+        self.successful_cs_tx_count = 0  # Số lượng giao dịch cross-shard thành công
         self.avg_latency = 0.0
         self.energy_consumption = 0.0
         

@@ -39,6 +39,14 @@ DQN Blockchain Simulation là một nền tảng nghiên cứu tiên tiến tíc
 pip install -r requirements.txt
 ```
 
+### Kiểm tra cài đặt
+
+Sau khi cài đặt các thư viện, bạn có thể kiểm tra xem tất cả các module được import đúng hay không:
+
+```bash
+python test_imports.py
+```
+
 ## Cấu trúc dự án
 
 ```
@@ -156,36 +164,58 @@ Giao thức định tuyến thông minh đa tác tử:
 - Theo dõi tiến trình phân tích thời gian thực
 - Xem và xuất báo cáo
 
-## Cách sử dụng
+## Chạy dự án
 
-### 1. Chạy mô phỏng cơ bản
+### Sử dụng scripts tự động
+
+Dự án cung cấp hai scripts để chạy tự động với đường dẫn Python đầy đủ:
+
+#### Windows:
 
 ```bash
-python -m dqn_blockchain_sim.simulation.main
+run_project.bat
 ```
 
-### 2. Chạy mô phỏng nâng cao
+#### Linux/Mac:
 
 ```bash
-python -m dqn_blockchain_sim.run_advanced_simulation --num_shards 4 --steps 100 --tx_per_step 20
+chmod +x run_project.sh
+./run_project.sh
 ```
 
-### 3. Chạy phân tích với giao diện dòng lệnh
+### Chạy trực tiếp
+
+Nếu bạn muốn chạy trực tiếp, hãy sử dụng một trong các lệnh sau với đường dẫn Python đầy đủ:
 
 ```bash
-python -m dqn_blockchain_sim.run_analysis
+# Đường dẫn đầy đủ đến Python
+PYTHON_PATH=$(which python3 2>/dev/null || which python)
+
+# Chạy mô phỏng cơ bản
+$PYTHON_PATH -m dqn_blockchain_sim.simulation.main
+
+# Chạy mô phỏng nâng cao
+$PYTHON_PATH -m dqn_blockchain_sim.run_advanced_simulation --num_shards 4 --steps 10 --tx_per_step 5
+
+# Chạy với visualize
+$PYTHON_PATH -m dqn_blockchain_sim.run_advanced_simulation --num_shards 4 --steps 10 --tx_per_step 5 --visualize
+
+# Chạy và lưu kết quả
+$PYTHON_PATH -m dqn_blockchain_sim.run_advanced_simulation --num_shards 4 --steps 10 --tx_per_step 5 --save_stats
+
+# Tạo báo cáo phân tích
+$PYTHON_PATH -m dqn_blockchain_sim.experiments.generate_report
+
+# Chạy giao diện phân tích
+$PYTHON_PATH -m dqn_blockchain_sim.run_analysis_gui
 ```
 
-Các tùy chọn:
-- `--skip-benchmarks`: Bỏ qua benchmark
-- `--skip-consensus`: Bỏ qua so sánh đồng thuận
-- `--skip-performance`: Bỏ qua phân tích hiệu suất
-- `--num-configs`: Số lượng cấu hình benchmark (mặc định: 3)
+### Chạy và ghi log
 
-### 4. Chạy phân tích với giao diện đồ họa
+Bạn cũng có thể sử dụng script run_and_log.py để chạy mô phỏng và ghi log:
 
 ```bash
-python -m dqn_blockchain_sim.run_analysis_gui
+python run_and_log.py
 ```
 
 ## Luồng dữ liệu

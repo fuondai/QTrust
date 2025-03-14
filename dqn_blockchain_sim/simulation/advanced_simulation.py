@@ -18,6 +18,7 @@ from dqn_blockchain_sim.blockchain.mad_rapid import MADRAPIDProtocol
 from dqn_blockchain_sim.tdcm.trust_manager import TrustManager
 from dqn_blockchain_sim.blockchain.adaptive_consensus import AdaptiveCrossShardConsensus
 from dqn_blockchain_sim.utils.real_data_builder import RealDataBuilder
+from dqn_blockchain_sim.configs.simulation_config import FEDERATED_LEARNING_CONFIG
 
 class AdvancedSimulation:
     """
@@ -31,7 +32,8 @@ class AdvancedSimulation:
         use_dqn: bool = True,
         eth_api_key: str = None,
         data_dir: str = "data",
-        log_dir: str = "logs"
+        log_dir: str = "logs",
+        use_federated_learning: bool = True
     ):
         """
         Khởi tạo mô phỏng nâng cao
@@ -43,6 +45,7 @@ class AdvancedSimulation:
             eth_api_key: Khóa API Ethereum (chỉ cần khi use_real_data=True)
             data_dir: Thư mục lưu trữ dữ liệu
             log_dir: Thư mục lưu trữ nhật ký
+            use_federated_learning: Sử dụng học liên kết (Federated Learning) hay không
         """
         self.num_shards = num_shards
         self.use_real_data = use_real_data
@@ -50,6 +53,7 @@ class AdvancedSimulation:
         self.eth_api_key = eth_api_key
         self.data_dir = data_dir
         self.log_dir = log_dir
+        self.use_federated_learning = use_federated_learning
         
         # Tạo thư mục nếu chưa tồn tại
         os.makedirs(data_dir, exist_ok=True)
@@ -90,12 +94,21 @@ class AdvancedSimulation:
         print("ACSC đã được khởi tạo thành công!")
         
         # 3. MAD-RAPID - Multi-Agent Dynamic RAPID Protocol
+        # Khởi tạo MAD-RAPID với Federated Learning
+        mad_rapid_config = {
+            "use_dqn": self.use_dqn,
+            "log_dir": self.log_dir,
+            "use_federated_learning": self.use_federated_learning,
+            "fl_rounds": FEDERATED_LEARNING_CONFIG.get("global_rounds", 5),
+            "fl_local_epochs": FEDERATED_LEARNING_CONFIG.get("local_epochs", 2),
+            "fl_client_fraction": FEDERATED_LEARNING_CONFIG.get("client_fraction", 0.8),
+            "fl_aggregation_method": FEDERATED_LEARNING_CONFIG.get("aggregation_method", "fedavg"),
+            "fl_secure_aggregation": FEDERATED_LEARNING_CONFIG.get("secure_aggregation", True)
+        }
+        
         self.mad_rapid = MADRAPIDProtocol(
-            input_size=8,
-            embedding_dim=64,
-            hidden_size=128,
-            lookback_window=10,
-            prediction_horizon=5
+            network=self.network,
+            config=mad_rapid_config
         )
         
         # Kết nối MAD-RAPID với mạng
@@ -576,7 +589,11 @@ class AdvancedSimulation:
                         if hasattr(self, 'mad_rapid') and self.mad_rapid is not None:
                             print(f"Thử xử lý lại bằng MAD-RAPID sau khi ACSC thất bại")
                             try:
-                                is_successful = self.mad_rapid.process_cross_shard_transaction(tx)
+                                is_successful = self.mad_rapid.process_cross_shard_transaction(
+                                    tx,
+                                    source_shard_id=tx.source_shard,
+                                    target_shard_id=tx.target_shard
+                                )
                                 if is_successful:
                                     mad_rapid_success_count += 1
                                     print(f"MAD-RAPID xử lý thành công giao dịch sau khi ACSC thất bại")
@@ -590,7 +607,11 @@ class AdvancedSimulation:
                     # Thử lại với MAD-RAPID nếu ACSC thất bại
                     if hasattr(self, 'mad_rapid') and self.mad_rapid is not None:
                         try:
-                            is_successful = self.mad_rapid.process_cross_shard_transaction(tx)
+                            is_successful = self.mad_rapid.process_cross_shard_transaction(
+                                tx,
+                                source_shard_id=tx.source_shard,
+                                target_shard_id=tx.target_shard
+                            )
                             if is_successful:
                                 mad_rapid_success_count += 1
                                 print(f"MAD-RAPID xử lý thành công sau lỗi ACSC")
@@ -602,7 +623,11 @@ class AdvancedSimulation:
                 if hasattr(self, 'mad_rapid') and self.mad_rapid is not None:
                     print(f"Sử dụng MAD-RAPID để xử lý giao dịch {getattr(tx, 'transaction_id', str(id(tx)))}")
                     try:
-                        is_successful = self.mad_rapid.process_cross_shard_transaction(tx)
+                        is_successful = self.mad_rapid.process_cross_shard_transaction(
+                            tx,
+                            source_shard_id=tx.source_shard,
+                            target_shard_id=tx.target_shard
+                        )
                         if is_successful:
                             mad_rapid_success_count += 1
                     except Exception as e:
@@ -632,7 +657,14 @@ class AdvancedSimulation:
             fee = getattr(tx, 'gas_price', 1.0) * gas_used
             
             if is_successful:
+                # Khởi tạo các biến thống kê nếu chưa có
+                if not hasattr(shard, 'successful_tx_count'):
+                    shard.successful_tx_count = 0
+                if not hasattr(shard, 'successful_cs_tx_count'):
+                    shard.successful_cs_tx_count = 0
+                
                 # Cập nhật số liệu cho giao dịch thành công
+                shard.successful_tx_count += 1
                 shard.successful_cs_tx_count += 1
                 self.successful_transactions += 1
                 
@@ -644,15 +676,21 @@ class AdvancedSimulation:
                 if hasattr(tx, 'status') and tx.status != 'processed':
                     tx.status = 'processed'
                 
-                # Cập nhật thưởng cho node
-                validator_reward = fee * 0.7  # 70% phí cho validator
+                # Thêm giao dịch vào transaction_data
+                tx_id = getattr(tx, 'transaction_id', str(id(tx)))
+                self.transaction_data[tx_id] = {
+                    'status': 'processed',
+                    'is_cross_shard': True,
+                    'source_shard': tx.source_shard,
+                    'target_shard': tx.target_shard,
+                    'timestamp': time.time(),
+                    'size': getattr(tx, 'size', 1024),
+                    'value': getattr(tx, 'value', 0.0),
+                    'gas_limit': getattr(tx, 'gas_limit', 21000),
+                    'gas_price': getattr(tx, 'gas_price', 1.0)
+                }
                 
-                # Thưởng cho DQN nếu đã sử dụng và dự đoán đúng
-                if hasattr(self, 'use_dqn') and self.use_dqn and shard.shard_id in self.dqn_agents:
-                    if (use_acsc and is_successful) or (not use_acsc and is_successful):
-                        # DQN đã dự đoán đúng, thưởng cho nó
-                        if hasattr(self.dqn_agents[shard.shard_id], 'reward'):
-                            self.dqn_agents[shard.shard_id].reward(1.0)  # Thưởng tích cực
+                self.stats["mad_rapid_optimized"] += 1
             else:
                 # Giao dịch thất bại
                 tx_id = getattr(tx, 'transaction_id', str(id(tx)))
@@ -882,7 +920,11 @@ class AdvancedSimulation:
                 # Sử dụng MAD-RAPID nếu có
                 if hasattr(self, 'mad_rapid') and self.mad_rapid is not None:
                     print(f"Xử lý giao dịch cross-shard từ shard {tx.source_shard} đến shard {tx.target_shard}")
-                    optimized = self.mad_rapid.process_cross_shard_transaction(tx)
+                    optimized = self.mad_rapid.process_cross_shard_transaction(
+                        tx,
+                        source_shard_id=tx.source_shard,
+                        target_shard_id=tx.target_shard
+                    )
                     print(f"Kết quả tối ưu hóa: {optimized}")
                     if optimized:
                         # Đặt trạng thái giao dịch là đã xử lý
@@ -1210,112 +1252,98 @@ class AdvancedSimulation:
         self.transactions = self.data_builder.build_transactions()
 
     def _hook_mad_rapid(self):
-        """Kết nối MAD-RAPID với mạng blockchain"""
-        import weakref
+        """
+        Kết nối MAD-RAPID với các shard trong mạng
+        """
+        if not hasattr(self, 'mad_rapid') or not self.mad_rapid:
+            print("CẢNH BÁO: MAD-RAPID chưa được khởi tạo!")
+            return
+        
         print("Đang kết nối MAD-RAPID với mạng blockchain...")
-
-        # Kiểm tra xem MAD-RAPID đã được tích hợp chưa
-        if not hasattr(self, 'mad_rapid') or self.mad_rapid is None:
-            print("MAD-RAPID chưa được khởi tạo, đang khởi tạo lại...")
-            from dqn_blockchain_sim.blockchain.mad_rapid import MADRAPIDProtocol
-            
-            # Khởi tạo MAD-RAPID
-            self.mad_rapid = MADRAPIDProtocol(
-                input_size=8,
-                embedding_dim=64,
-                hidden_size=128,
-                lookback_window=10,
-                prediction_horizon=5
-            )
-            print("Đã khởi tạo MAD-RAPID: ", self.mad_rapid)
         
-        # Thiết lập tham chiếu từ MAD-RAPID đến mô phỏng (sử dụng weakref để tránh vòng lặp tham chiếu)
-        self.mad_rapid.simulation = weakref.proxy(self)
+        # Đảm bảo shards được khởi tạo
+        if not hasattr(self.network, 'shards') or not self.network.shards:
+            print("CẢNH BÁO: Không tìm thấy shards trong mạng!")
+            return
         
-        # Thiết lập tham chiếu từ MAD-RAPID đến mạng
-        self.mad_rapid.network = self.network
+        print(f"Số shard trong MAD-RAPID: {len(self.network.shards)}")
         
-        # Khởi tạo số shard cho MAD-RAPID
-        self.mad_rapid.num_shards = self.num_shards
-        print(f"Số shard trong MAD-RAPID: {self.mad_rapid.num_shards}")
-        
-        # Khởi tạo các thuộc tính cần thiết cho các shard
-        if not hasattr(self.mad_rapid, 'shard_states'):
-            self.mad_rapid.shard_states = {}
-        
-        if not hasattr(self.mad_rapid, 'shard_agents'):
-            self.mad_rapid.shard_agents = {}
-            
-        # Khởi tạo DQN agents cho mỗi shard nếu chưa có
-        if self.use_dqn and (not hasattr(self.mad_rapid, 'dqn_agents') or not self.mad_rapid.dqn_agents):
-            from dqn_blockchain_sim.agents.dqn_agent import ShardDQNAgent
-            
-            # Khởi tạo DQN agents cho mỗi shard
-            self.mad_rapid.dqn_agents = {}
-            for shard_id in range(self.num_shards):
-                # Khởi tạo agent với state_size=8 (đặc trưng shard) và action_size=3 (các hành động tối ưu)
-                agent = ShardDQNAgent(
-                    shard_id=shard_id,
-                    state_size=8,
-                    action_size=3
-                )
-                # Gán shard cho agent
-                if shard_id < len(self.network.shards):
-                    agent.shard = self.network.shards[shard_id]
-                
-                # Lưu agent vào danh sách
-                self.mad_rapid.dqn_agents[shard_id] = agent
-                
-            print(f"Đã khởi tạo {len(self.mad_rapid.dqn_agents)} DQN agents cho MAD-RAPID")
-            
-        # Khởi tạo các thuộc tính theo dõi hiệu suất
-        if not hasattr(self.mad_rapid, 'transaction_history'):
-            self.mad_rapid.transaction_history = []
-            
-        if not hasattr(self.mad_rapid, 'optimization_history'):
-            self.mad_rapid.optimization_history = []
-            
-        if not hasattr(self.mad_rapid, 'cross_shard_success_count'):
-            self.mad_rapid.cross_shard_success_count = 0
-        
-        # Khởi tạo các thuộc tính cần thiết cho các shard
-        for shard_id, shard in self.network.shards.items():
-            # Đảm bảo rằng mỗi shard có các thuộc tính cần thiết
-            for attr in ['transaction_queue', 'cross_shard_queue', 'processed_transactions',
-                        'failed_transactions', 'confirmed_transactions', 'rejected_transactions',
-                        'throughput', 'latency', 'congestion_level', 'cross_shard_tx_count',
-                        'total_gas_used', 'total_fees', 'successful_tx_count', 'successful_cs_tx_count']:
-                if not hasattr(shard, attr):
-                    if attr in ['transaction_queue', 'cross_shard_queue']:
-                        setattr(shard, attr, [])
-                    elif attr in ['processed_transactions', 'failed_transactions', 'confirmed_transactions', 'rejected_transactions']:
-                        setattr(shard, attr, {})
-                    elif attr in ['throughput', 'latency', 'congestion_level', 'cross_shard_tx_count',
-                               'total_gas_used', 'total_fees', 'successful_tx_count', 'successful_cs_tx_count']:
-                        setattr(shard, attr, 0)
-        
-        # Khởi tạo embeddings cho các shard
-        if not hasattr(self.mad_rapid, 'shard_embeddings') or not self.mad_rapid.shard_embeddings:
-            print("Đang khởi tạo shard_embeddings...")
+        # Khởi tạo shard embeddings nếu chưa có
+        print("Đang khởi tạo shard_embeddings...")
+        if not hasattr(self.mad_rapid, 'shard_embeddings'):
             self.mad_rapid._initialize_shard_embeddings()
         
-        # Ghi đè phương thức xử lý giao dịch xuyên shard trong các shard
+        # Gán các phương thức xử lý cho từng shard
         for shard_id, shard in self.network.shards.items():
-            # Lưu lại phương thức gốc để sử dụng khi cần
-            if not hasattr(shard, '_original_process_cross_shard'):
-                shard._original_process_cross_shard = shard.process_cross_shard_transaction if hasattr(shard, 'process_cross_shard_transaction') else None
-            
-            # Ghi đè phương thức xử lý giao dịch xuyên shard
+            # Định nghĩa phương thức xử lý giao dịch cho shard
             def mad_rapid_process_tx(tx, shard=shard):
                 # Sử dụng MAD-RAPID để xử lý giao dịch
-                result = self.mad_rapid.process_cross_shard_transaction(tx)
-                return result
+                if hasattr(tx, 'is_cross_shard') and tx.is_cross_shard:
+                    source_shard = tx.source_shard if hasattr(tx, 'source_shard') else shard.id
+                    target_shard = tx.target_shard if hasattr(tx, 'target_shard') else (shard.id + 1) % len(self.network.shards)
+                    
+                    # Tối ưu hóa đường dẫn cho giao dịch xuyên shard
+                    # TODO: Implement this with MAD-RAPID
+                    
+                # Trả về True để tiếp tục xử lý giao dịch
+                return True
             
-            # Gán phương thức mới
-            shard.process_cross_shard_transaction = mad_rapid_process_tx
+            # Gán phương thức xử lý cho shard
+            setattr(shard, 'mad_rapid_process_tx', mad_rapid_process_tx)
             
         print("Đã kết nối MAD-RAPID với mạng blockchain thành công!")
 
+    def get_federated_learning_stats(self):
+        """
+        Lấy thống kê về Federated Learning
+        
+        Returns:
+            Dict chứa thông tin thống kê về Federated Learning
+        """
+        if not self.use_federated_learning or not hasattr(self.network, 'mad_rapid') or not self.network.mad_rapid:
+            return {}
+            
+        if not hasattr(self.network.mad_rapid, 'federated_learning') or not self.network.mad_rapid.federated_learning:
+            return {}
+            
+        return self.network.mad_rapid.federated_learning.get_stats()
+        
+    def collect_statistics(self):
+        """
+        Thu thập thống kê từ mô phỏng
+        """
+        stats = {}
+        
+        # Thu thập thông tin từ các module
+        tx_stats = self._collect_transaction_stats()
+        perf_stats = self._collect_performance_stats()
+        
+        # Thu thập thông tin từ các module
+        module_stats = {}
+        
+        # Thống kê MAD-RAPID
+        if hasattr(self.network, 'mad_rapid') and self.network.mad_rapid:
+            module_stats['mad_rapid'] = self.network.mad_rapid.get_stats()
+            
+        # Thống kê ACSC
+        if hasattr(self, 'acsc'):
+            module_stats['acsc'] = self.acsc.get_stats() if hasattr(self.acsc, 'get_stats') else {}
+            
+        # Thống kê Trust Manager
+        if hasattr(self, 'trust_manager'):
+            module_stats['trust_manager'] = self.trust_manager.get_stats() if hasattr(self.trust_manager, 'get_stats') else {}
+            
+        # Thống kê Federated Learning
+        if self.use_federated_learning:
+            fl_stats = self.get_federated_learning_stats()
+            if fl_stats:
+                module_stats['federated_learning'] = fl_stats
+                
+        stats['transaction_stats'] = tx_stats
+        stats['performance_stats'] = perf_stats
+        stats['module_stats'] = module_stats
+        
+        return stats
 
 def run_advanced_simulation(args):
     """
@@ -1331,7 +1359,8 @@ def run_advanced_simulation(args):
         use_dqn=args.use_dqn,
         eth_api_key=args.eth_api_key,
         data_dir=args.data_dir,
-        log_dir=args.log_dir
+        log_dir=args.log_dir,
+        use_federated_learning=args.use_federated_learning
     )
     
     # Chạy mô phỏng
@@ -1357,6 +1386,7 @@ if __name__ == "__main__":
     parser.add_argument('--log_dir', type=str, default='logs', help='Thư mục lưu nhật ký')
     parser.add_argument('--visualize', action='store_true', help='Hiển thị đồ thị kết quả')
     parser.add_argument('--save_stats', action='store_true', help='Lưu thống kê vào file')
+    parser.add_argument('--use_federated_learning', action='store_true', help='Sử dụng học liên kết (Federated Learning)')
     
     args = parser.parse_args()
     

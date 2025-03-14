@@ -1,0 +1,61 @@
+{
+  "transaction_stats": {
+    "total_transactions": 10,
+    "successful_transactions": 10,
+    "success_rate": 1.0,
+    "cross_shard_transactions": 7,
+    "successful_cross_shard_transactions": 7,
+    "cross_shard_success_rate": 0.8,
+    "success_rate_std": 0.0,
+    "success_rate_95ci": [
+      NaN,
+      NaN
+    ],
+    "cross_shard_success_rate_std": 0.4,
+    "cross_shard_success_rate_95ci": [
+      0.24471097896044036,
+      1.3552890210395598
+    ]
+  },
+  "performance_stats": {
+    "avg_throughput": 0.2,
+    "avg_latency": 11.0,
+    "energy_consumption": 310.76200000000006,
+    "congestion_level": 0.0
+  },
+  "module_stats": {
+    "mad_rapid": {
+      "total_tx": 0,
+      "optimized_tx": 0,
+      "latency_improvement": 0,
+      "energy_saved": 0
+    },
+    "acsc": {
+      "total_tx": 0,
+      "fast_consensus": 0,
+      "standard_consensus": 0,
+      "robust_consensus": 0,
+      "consensus_success_rate": 0
+    }
+  },
+  "run_id": "1741920243",
+  "config": {
+    "num_shards": 2,
+    "steps": 2,
+    "tx_per_step": 1,
+    "iterations": 5,
+    "use_real_data": false,
+    "use_dqn": true,
+    "eth_api_key": null,
+    "network_latency": 100,
+    "latency_variation": 0.2,
+    "packet_loss": 0.01,
+    "block_time": 2.0,
+    "data_dir": "data",
+    "log_dir": "logs",
+    "visualize": false,
+    "save_stats": true,
+    "run_id": "1741920243"
+  },
+  "timestamp": "2025-03-14T09:44:07.067459"
+}

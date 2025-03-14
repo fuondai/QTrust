@@ -1,0 +1,49 @@
+{
+  "transaction_stats": {
+    "success_rate": 0.9640000000000001,
+    "success_rate_std": 0.02332380757938118,
+    "success_rate_95ci": [
+      0.9350396678276504,
+      0.9929603321723498
+    ],
+    "total_transactions": 0,
+    "successful_transactions": 0,
+    "cross_shard_transactions": 191,
+    "successful_cross_shard_transactions": 0,
+    "cross_shard_success_rate": 0.0
+  },
+  "performance_metrics": {},
+  "module_stats": {
+    "mad_rapid": {},
+    "htdcm": {
+      "trust_violations_detected": 0,
+      "transaction_security_level": {
+        "high": 0,
+        "medium": 0,
+        "low": 0
+      }
+    },
+    "acsc": {}
+  },
+  "iterations": 5,
+  "run_id": "1741914055",
+  "config": {
+    "num_shards": 4,
+    "steps": 10,
+    "tx_per_step": 5,
+    "iterations": 5,
+    "use_real_data": false,
+    "use_dqn": true,
+    "eth_api_key": null,
+    "network_latency": 100,
+    "latency_variation": 0.2,
+    "packet_loss": 0.01,
+    "block_time": 2.0,
+    "data_dir": "data",
+    "log_dir": "logs",
+    "visualize": false,
+    "save_stats": true,
+    "run_id": "1741914055"
+  },
+  "timestamp": "2025-03-14T08:00:59.391509"
+}

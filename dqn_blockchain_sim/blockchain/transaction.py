@@ -17,6 +17,7 @@ class TransactionStatus(Enum):
     REJECTED = "rejected"       # Bị từ chối
     TIMEOUT = "timeout"         # Hết thời gian
     CROSS_SHARD = "cross_shard" # Đang trong quá trình xử lý xuyên mảnh
+    OPTIMIZED = "optimized"     # Đã được tối ưu hóa đường dẫn
 
 
 class Transaction:

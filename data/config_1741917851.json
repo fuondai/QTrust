@@ -1,0 +1,18 @@
+{
+  "num_shards": 2,
+  "steps": 2,
+  "tx_per_step": 1,
+  "iterations": 1,
+  "use_real_data": false,
+  "use_dqn": true,
+  "eth_api_key": null,
+  "network_latency": 100,
+  "latency_variation": 0.2,
+  "packet_loss": 0.01,
+  "block_time": 2.0,
+  "data_dir": "data",
+  "log_dir": "logs",
+  "visualize": false,
+  "save_stats": true,
+  "run_id": "1741917851"
+}

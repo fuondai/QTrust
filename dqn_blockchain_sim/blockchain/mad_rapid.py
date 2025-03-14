@@ -12,9 +12,12 @@ import networkx as nx
 from typing import Dict, List, Tuple, Any, Optional, Set
 import random
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from dqn_blockchain_sim.blockchain.network import BlockchainNetwork
+from dqn_blockchain_sim.blockchain.transaction import TransactionStatus
 import torch.optim as optim
+import math
+import heapq
 
 class LSTMCongestionPredictor(nn.Module):
     """
@@ -81,45 +84,41 @@ class LSTMCongestionPredictor(nn.Module):
         
         return outputs, hidden
         
-    def predict(self, features: np.ndarray) -> float:
+    def predict(self, feature_history):
         """
-        Dự đoán mức độ tắc nghẽn
+        Dự đoán mức độ tắc nghẽn từ lịch sử đặc trưng
         
         Args:
-            features: Mảng numpy chứa lịch sử đặc trưng của shard
-            
+            feature_history: Mảng numpy chứa các vector đặc trưng trong quá khứ
+                            shape (seq_len, input_size)
+                            
         Returns:
-            Mức độ tắc nghẽn dự đoán (0-1)
+            float: Mức độ tắc nghẽn dự đoán (0-1)
         """
         # Chuyển đổi thành tensor
-        if len(features.shape) == 1:
-            # Nếu chỉ có một vector đặc trưng, thêm chiều batch và sequence
-            x = torch.tensor(features[None, None, :], dtype=torch.float32)
-        elif len(features.shape) == 2:
-            # Nếu đã có nhiều bước thời gian, thêm chiều batch
-            x = torch.tensor(features[None, :, :], dtype=torch.float32)
+        if isinstance(feature_history, np.ndarray):
+            # Đảm bảo kích thước đúng [batch_size, seq_len, input_size]
+            if len(feature_history.shape) == 2:
+                feature_history = feature_history.reshape(1, *feature_history.shape)
+            x = torch.FloatTensor(feature_history)
         else:
-            # Đã có đủ các chiều
-            x = torch.tensor(features, dtype=torch.float32)
+            # Đã là tensor, đảm bảo kích thước đúng
+            if len(feature_history.shape) == 2:
+                feature_history = feature_history.unsqueeze(0)
+            x = feature_history
         
-        # Kiểm tra kích thước và điều chỉnh nếu cần
-        if x.size(-1) != self.input_size:
-            if x.size(-1) > self.input_size:
-                # Cắt bớt
-                x = x[..., :self.input_size]
-            else:
-                # Thêm padding
-                padding = torch.zeros(*x.shape[:-1], self.input_size - x.size(-1), device=x.device)
-                x = torch.cat([x, padding], dim=-1)
+        # Đặt mạng ở chế độ đánh giá
+        self.eval()
         
-        # Dự đoán
+        # Dự đoán không tính gradient
         with torch.no_grad():
-            prediction, _ = self.forward(x)
+            outputs, _ = self.forward(x)
+            # Lấy dự đoán cuối cùng và chuyển về giá trị scalar
+            prediction = outputs[0, -1, 0].item()
+            # Đảm bảo giá trị nằm trong khoảng [0, 1]
+            prediction = max(0.0, min(1.0, prediction))
             
-        # Lấy giá trị cuối cùng trong chuỗi dự đoán và áp dụng sigmoid
-        congestion = torch.sigmoid(prediction[0, -1, 0]).item()
-        
-        return congestion
+        return prediction
 
 
 class AttentionBasedPathOptimizer:
@@ -332,701 +331,1237 @@ class AttentionBasedPathOptimizer:
 
 class MADRAPIDProtocol:
     """
-    Giao thức MAD-RAPID: Multi-Agent Dynamic - Routing with Adaptive
-    Prioritization in Distributed Shards
-    
-    Giao thức này triển khai định tuyến thông minh dựa trên dự đoán tắc nghẽn
-    và tối ưu hóa đường dẫn.
+    Giao thức MAD-RAPID triển khai lộ trình tối ưu đa tác tử và đường dẫn ưu tiên
+    thích ứng cho giao dịch xuyên mảnh
     """
     
-    def __init__(self, 
-                input_size: int = 8, 
-                embedding_dim: int = 64, 
-                hidden_size: int = 128, 
-                lookback_window: int = 10,
-                prediction_horizon: int = 5,
-                optimizer=None,
-                learning_rate: float = 0.001):
+    def __init__(self, network, config=None):
         """
-        Khởi tạo module MAD-RAPID
+        Khởi tạo MAD-RAPID protocol
         
         Args:
-            input_size: Kích thước đầu vào của mô hình (số lượng tính năng)
-            embedding_dim: Kích thước embedding cho mỗi shard
-            hidden_size: Kích thước lớp ẩn của LSTM
-            lookback_window: Số lượng mẫu trong quá khứ để dự đoán
-            prediction_horizon: Số lượng bước dự đoán trong tương lai
-            optimizer: Optimizer được sử dụng (mặc định là Adam)
-            learning_rate: Tốc độ học
+            network: Tham chiếu đến mạng blockchain
+            config: Dictionary chứa cấu hình
         """
-        super().__init__()
+        self.network = network
+        self.config = config if config is not None else {}
+        self.use_dqn = self.config.get("use_dqn", True)
         
-        self.input_size = input_size  # Đảm bảo input_size được lưu
-        self.embedding_dim = embedding_dim
-        self.hidden_size = hidden_size
-        self.lookback_window = lookback_window
-        self.prediction_horizon = prediction_horizon
+        # Cấu hình federated learning
+        self.use_federated_learning = self.config.get("use_federated_learning", False)
+        self.federated_learning = None
         
-        # Mô hình dự đoán tắc nghẽn
-        self.congestion_predictor = LSTMCongestionPredictor(
-            input_size=input_size,  # Sử dụng input_size thay vì embedding_dim
-            hidden_size=hidden_size
-        )
-        
-        # Optimizer
-        if optimizer is None:
-            self.optimizer = optim.Adam(self.congestion_predictor.parameters(), lr=learning_rate)
-        else:
-            self.optimizer = optimizer
-        
-        # Lịch sử tính năng của các shard
-        self.feature_history = {}
-        
-        # Bộ nhớ đệm cho đường dẫn tối ưu
-        self.path_cache = {}
-        self.path_cache_ttl = {}  # Time-to-live cho bộ nhớ đệm
-        self.latency_matrix = None  # Ma trận độ trễ giữa các cặp shard
-        
-        # Thông tin hiệu suất
-        self.performance_stats = {
-            "total_transactions": 0,
-            "optimized_transactions": 0,
-            "latency_improvement": 0,
-            "energy_saved": 0
+        self.stats = {
+            "optimized_tx_count": 0,
+            "total_tx_processed": 0,
+            "path_selection_stats": {
+                "optimized": 0,
+                "direct": 0,
+                "direct_after_fail": 0,
+                "rejected": 0
+            },
+            "latency_improvement": 0.0,
+            "energy_saved": 0.0,
+            "processing_times": []
         }
         
-        # Tham chiếu đến mạng
-        self.network = None
+        # Thêm các biến thống kê mới
+        self.total_tx_count = 0          # Tổng số giao dịch đã xử lý
+        self.successful_tx_count = 0     # Tổng số giao dịch thành công
+        self.optimized_tx_count = 0      # Tổng số giao dịch được tối ưu hóa
         
-        # Embeddings cho các shard
-        self.shard_embeddings = {}
+        # Lưu thời gian bắt đầu để tính toán thống kê
+        self.start_time = time.time()
         
-        # Thuộc tính mới để hỗ trợ tracking và phân tích hiệu suất
-        self.processed_transactions = {}  # Lưu trữ các giao dịch đã xử lý
-        self.optimized_paths = {}         # Lưu trữ các đường dẫn đã tối ưu hóa
-        self.total_transactions = 0       # Tổng số giao dịch đã xử lý
-        self.optimized_transactions = 0   # Số giao dịch đã được tối ưu hóa thành công
-        self.simulation = None            # Tham chiếu đến simulation (được thiết lập trong _hook_mad_rapid)
+        # Khởi tạo LSTM cho dự đoán tắc nghẽn
+        self.congestion_predictor = None
+        if self.config.get("use_lstm_predictor", True):
+            try:
+                self.congestion_predictor = LSTMCongestionPredictor(
+                    input_size=self.config.get("lstm_input_size", 8),
+                    hidden_size=self.config.get("lstm_hidden_size", 128),
+                    num_layers=self.config.get("lstm_num_layers", 2),
+                    output_size=1
+                )
+            except Exception as e:
+                print(f"Lỗi khi khởi tạo LSTM Congestion Predictor: {e}")
         
-    def _initialize_shard_embeddings(self) -> None:
-        """
-        Khởi tạo các vector nhúng cho các shard
-        """
-        self.shard_embeddings = {}
+        # Khởi tạo AttentionBasedPathOptimizer
+        self.path_optimizer = None
+        if self.config.get("use_attention_optimizer", True):
+            try:
+                self.path_optimizer = AttentionBasedPathOptimizer(
+                    embedding_dim=self.config.get("embedding_dim", 64),
+                    attention_heads=self.config.get("attention_heads", 4)
+                )
+            except Exception as e:
+                print(f"Lỗi khi khởi tạo AttentionBasedPathOptimizer: {e}")
         
-        # Xác định số lượng shard từ simulation hoặc network
-        num_shards = 4  # Giá trị mặc định
+        # Thu thập feature history để dự đoán tắc nghẽn
+        self.feature_history = {}
+        self.shard_embeddings = None
+        self.latency_matrix = None
+        self.congestion_tensor = None
         
-        if hasattr(self, 'simulation') and self.simulation:
-            if hasattr(self.simulation, 'num_shards'):
-                num_shards = self.simulation.num_shards
-        elif hasattr(self, 'network') and self.network:
-            if hasattr(self.network, 'shards'):
-                num_shards = len(self.network.shards)
+        # Khởi tạo Federated Learning nếu được kích hoạt
+        if self.use_federated_learning:
+            try:
+                from dqn_blockchain_sim.federated.federated_learning import FederatedLearning
+                self.federated_learning = FederatedLearning(
+                    global_rounds=self.config.get("fl_rounds", 5),
+                    local_epochs=self.config.get("fl_local_epochs", 2),
+                    client_fraction=self.config.get("fl_client_fraction", 0.8),
+                    aggregation_method=self.config.get("fl_aggregation_method", "fedavg"),
+                    secure_aggregation=self.config.get("fl_secure_aggregation", True),
+                    log_dir=self.config.get("log_dir", "logs")
+                )
+                print("Đã khởi tạo Federated Learning trong MAD-RAPID")
+            except ImportError as e:
+                print(f"Không thể tải module Federated Learning: {e}")
+                self.use_federated_learning = False
         
-        # Lưu num_shards vào đối tượng để sử dụng sau này
-        self.num_shards = num_shards
-        
-        # Khởi tạo lịch sử tính năng
-        self.feature_history = {shard_id: [] for shard_id in range(num_shards)}
-        
-        # Khởi tạo các giá trị ngẫu nhiên hoặc mặc định cho các vector
-        for shard_id in range(num_shards):
-            # Các đặc trưng có thể là:
-            # 1. Kích thước hàng đợi giao dịch
-            # 2. Độ trễ trung bình
-            # 3. Mức độ tắc nghẽn
-            # 4. Số lượng node
-            # 5. Throughput
-            # 6. Số lượng giao dịch xuyên mảnh
-            # 7. Tổng gas đã sử dụng
-            # 8. Tổng phí giao dịch
-            
-            features = np.zeros(8)  # Khởi tạo với 8 đặc trưng
-            
-            # Lấy thông tin shard từ network nếu có
-            if hasattr(self, 'network') and self.network and hasattr(self.network, 'shards'):
-                if shard_id in self.network.shards:
-                    shard = self.network.shards[shard_id]
-                    
-                    # Cập nhật các đặc trưng từ thông tin shard
-                    if hasattr(shard, 'transaction_queue'):
-                        features[0] = len(shard.transaction_queue)
-                    if hasattr(shard, 'latency'):
-                        features[1] = shard.latency
-                    if hasattr(shard, 'congestion_level'):
-                        features[2] = shard.congestion_level
-                    if hasattr(shard, 'throughput'):
-                        features[4] = shard.throughput
-                    if hasattr(shard, 'cross_shard_tx_count'):
-                        features[5] = shard.cross_shard_tx_count
-                    if hasattr(shard, 'total_gas_used'):
-                        features[6] = shard.total_gas_used
-                    if hasattr(shard, 'total_fees'):
-                        features[7] = shard.total_fees
-            
-            # Lưu trữ dữ liệu đặc trưng
-            self.feature_history[shard_id].append(features)
-            
-            # Tạo vector nhúng
-            self.shard_embeddings[shard_id] = torch.rand(self.embedding_dim)
+        # Khởi tạo DQN agents
+        self.dqn_agents = {}
+        if self.use_dqn:
+            self.initialize_dqn_agents()
 
-    def update_feature_history(self) -> None:
+    def initialize_dqn_agents(self):
         """
-        Cập nhật lịch sử đặc trưng của các shard
+        Khởi tạo các DQN agent cho mỗi shard
         """
-        if not hasattr(self, 'num_shards'):
-            # Đảm bảo rằng num_shards đã được khởi tạo
-            self._initialize_shard_embeddings()
+        from dqn_blockchain_sim.agents.dqn_agent import ShardDQNAgent
         
-        for shard_id in range(self.num_shards):
-            # Tạo vector đặc trưng mới
-            features = np.zeros(8)  # Khởi tạo với 8 đặc trưng
+        print(f"Khởi tạo {len(self.network.shards)} DQN agents...")
+        for shard_id, shard in self.network.shards.items():
+            # Khởi tạo đặc trưng đầu vào và đầu ra
+            state_size = self.config.get("dqn_state_size", 12)  # Kích thước vector trạng thái
+            action_size = self.config.get("dqn_action_size", 3)  # Số hành động có thể
             
-            if hasattr(self, 'network') and self.network and hasattr(self.network, 'shards'):
-                if shard_id in self.network.shards:
-                    shard = self.network.shards[shard_id]
-                    # Cập nhật đặc trưng từ dữ liệu shard
-                    if hasattr(shard, 'transaction_queue'):
-                        features[0] = len(shard.transaction_queue)
-                    elif hasattr(shard, 'transaction_pool'):
-                        features[0] = len(shard.transaction_pool)
-                    
-                    # Lấy các thông số từ shard thay vì shard_states
-                    if hasattr(shard, 'latency'):
-                        features[1] = shard.latency
-                    if hasattr(shard, 'congestion_level'):
-                        features[2] = shard.congestion_level
-                    if hasattr(shard, 'nodes'):
-                        features[3] = len(shard.nodes)
-                    if hasattr(shard, 'throughput'):
-                        features[4] = shard.throughput
-                    if hasattr(shard, 'cross_shard_tx_count'):
-                        features[5] = shard.cross_shard_tx_count
-                    if hasattr(shard, 'total_gas_used'):
-                        features[6] = shard.total_gas_used
-                    if hasattr(shard, 'total_fees'):
-                        features[7] = shard.total_fees
+            # Tạo cấu hình DQN
+            dqn_config = {
+                "hidden_layers": [64, 128, 64],
+                "learning_rate": self.config.get("dqn_learning_rate", 0.001),
+                "gamma": self.config.get("dqn_gamma", 0.99),
+                "epsilon": self.config.get("dqn_epsilon", 1.0),
+                "epsilon_min": self.config.get("dqn_epsilon_min", 0.1),
+                "epsilon_decay": self.config.get("dqn_epsilon_decay", 0.995),
+                "replay_buffer_size": self.config.get("dqn_batch_size", 64) * 10,
+                "target_update_freq": 10,
+                "use_double_dqn": self.config.get("use_double_dqn", True),
+                "use_dueling_dqn": self.config.get("use_dueling_dqn", False),
+                "use_prioritized_replay": self.config.get("use_prioritized_replay", True),
+                "tau": self.config.get("dqn_tau", 0.01)
+            }
             
-            # Chuẩn hóa đặc trưng để tránh các giá trị quá lớn
-            max_val = np.max(features)
-            norm_features = features / (max_val if max_val > 0 else 1)
+            # Tạo agent cho mỗi shard
+            agent = ShardDQNAgent(
+                shard_id=shard_id,
+                state_size=state_size,
+                action_size=action_size,
+                config=dqn_config
+            )
             
-            # Đảm bảo rằng vector đặc trưng phù hợp với embedding_dim nếu cần
-            if len(norm_features) < self.embedding_dim:
-                padded_features = np.pad(norm_features, (0, self.embedding_dim - len(norm_features)), 'constant')
-                # Cập nhật lịch sử đặc trưng
-                self.feature_history[shard_id].append(padded_features)
-            else:
-                # Cắt bớt nếu quá lớn
-                self.feature_history[shard_id].append(norm_features[:self.embedding_dim])
+            self.dqn_agents[shard_id] = agent
             
-            # Giới hạn kích thước lịch sử
-            while len(self.feature_history[shard_id]) > self.lookback_window + self.prediction_horizon:
-                self.feature_history[shard_id].pop(0)
-            
-            # Cập nhật vector nhúng nếu cần
-            if shard_id in self.shard_embeddings:
-                # Sử dụng giá trị đặc trưng mới nhất cho embedding
-                if len(norm_features) < self.embedding_dim:
-                    self.shard_embeddings[shard_id] = torch.tensor(padded_features, dtype=torch.float32)
-                else:
-                    self.shard_embeddings[shard_id] = torch.tensor(norm_features[:self.embedding_dim], dtype=torch.float32)
+        print(f"Đã khởi tạo {len(self.dqn_agents)} DQN agents")
 
-    def predict_congestion(self, shard_id: int) -> float:
+        # Đăng ký các agent với Federated Learning nếu được bật
+        if self.use_federated_learning and self.federated_learning:
+            for shard_id, agent in self.dqn_agents.items():
+                # Lấy kích thước dữ liệu (số lượng giao dịch trong shard)
+                data_size = len(self.network.shards[shard_id].transaction_pool) if hasattr(self.network.shards[shard_id], 'transaction_pool') else 0
+                
+                # Đăng ký agent với federated learning
+                self.federated_learning.register_client(
+                    client_id=str(shard_id),
+                    model=agent.policy_net,
+                    data_size=data_size
+                )
+                
+            print(f"Đã đăng ký {len(self.dqn_agents)} DQN agents với Federated Learning")
+
+    def _train_dqn_agents(self):
         """
-        Dự đoán mức độ tắc nghẽn trong tương lai cho một shard
+        Huấn luyện tất cả các agent DQN dựa trên kinh nghiệm thu thập được
+        """
+        if not self.use_dqn or len(self.dqn_agents) == 0:
+            return
+            
+        # Train all DQN agents
+        for shard_id, agent in self.dqn_agents.items():
+            if hasattr(agent, 'train'):
+                agent.train()
+                
+        # Tăng biến đếm tổng số bước huấn luyện
+        self.total_training_steps += 1
+        
+        # Thực hiện cập nhật federated learning
+        if self.use_federated_learning and self.federated_learning:
+            for shard_id, agent in self.dqn_agents.items():
+                # Cập nhật mô hình cục bộ cho federated learning
+                metrics = {
+                    "loss": np.mean(agent.loss_history[-10:]) if hasattr(agent, 'loss_history') and agent.loss_history else 0,
+                    "reward": np.mean(agent.reward_history[-10:]) if hasattr(agent, 'reward_history') and agent.reward_history else 0,
+                    "epsilon": agent.epsilon if hasattr(agent, 'epsilon') else 0
+                }
+                
+                self.federated_learning.update_client_model(
+                    client_id=str(shard_id),
+                    model=agent.policy_net,
+                    metrics=metrics
+                )
+            
+            # Thực hiện một vòng federated learning sau mỗi N bước huấn luyện
+            # hoặc khi đạt được một ngưỡng nhất định
+            if self.total_training_steps % self.fl_rounds == 0:
+                print("\nBắt đầu vòng Federated Learning...")
+                self.federated_learning.run_federated_round()
+                
+                # Cập nhật các agent với mô hình toàn cục mới
+                for shard_id, agent in self.dqn_agents.items():
+                    # Cập nhật mạng chính sách từ mô hình toàn cục
+                    agent.policy_net.load_state_dict(self.federated_learning.global_model.state_dict())
+                    
+                    # Cập nhật mạng mục tiêu nếu cần
+                    if hasattr(agent, 'sync_target_network'):
+                        agent.sync_target_network()
+                        
+                print("Đã hoàn thành vòng Federated Learning và cập nhật các agent\n")
+                
+                # Lưu mô hình toàn cục định kỳ
+                if hasattr(self, 'log_dir'):
+                    model_path = f"{self.log_dir}/federated_model_global_v{self.federated_learning.global_model_version}.pt"
+                    self.federated_learning.save_model(model_path)
+
+    def _predict_congestion(self, shard_id):
+        """
+        Dự đoán mức độ tắc nghẽn của một shard dựa trên dữ liệu hiện tại
         
         Args:
-            shard_id: ID của shard
+            shard_id: ID của shard cần dự đoán
             
         Returns:
-            Mức độ tắc nghẽn dự đoán
+            float: Mức độ tắc nghẽn dự đoán (0-1)
         """
-        # Kiểm tra xem có đủ dữ liệu lịch sử không
-        if shard_id not in self.feature_history or len(self.feature_history[shard_id]) < 3:
-            # Không đủ dữ liệu, trả về giá trị mặc định
-            if hasattr(self, 'network') and self.network and hasattr(self.network, 'shards'):
-                if shard_id in self.network.shards and hasattr(self.network.shards[shard_id], 'congestion_level'):
-                    return self.network.shards[shard_id].congestion_level
+        # Kiểm tra tính hợp lệ của shard_id
+        if not hasattr(self, 'network') or not self.network:
             return 0.0
+            
+        if not hasattr(self.network, 'shards') or shard_id not in self.network.shards:
+            return 0.0
+            
+        # Lấy thông tin cơ bản từ shard
+        shard = self.network.shards[shard_id]
         
-        # Đảm bảo tất cả các vector đặc trưng có cùng kích thước
-        feature_history = self.feature_history[shard_id]
-        normalized_features = []
+        # Dự đoán đơn giản dựa trên số lượng giao dịch
+        tx_count = len(shard.transaction_pool) if hasattr(shard, 'transaction_pool') else 0
+        cross_shard_tx_count = len([tx for tx in shard.transaction_pool if hasattr(tx, 'is_cross_shard') and tx.is_cross_shard]) if hasattr(shard, 'transaction_pool') else 0
         
-        # Chỉ sử dụng input_size phần tử đầu tiên của mỗi vector đặc trưng
-        for feature_vector in feature_history[-self.lookback_window:]:
-            if len(feature_vector) < self.input_size:
-                # Pad nếu vector quá ngắn
-                padded = np.pad(feature_vector, (0, self.input_size - len(feature_vector)), 'constant')
-                normalized_features.append(padded[:self.input_size])
-            else:
-                # Truncate nếu vector quá dài
-                normalized_features.append(feature_vector[:self.input_size])
+        # Dự đoán dựa trên công thức đơn giản
+        max_capacity = 100  # Giả định: mỗi shard xử lý tối đa 100 giao dịch
+        base_congestion = min(1.0, tx_count / max_capacity)
         
-        # Chuyển thành mảng NumPy có kích thước đồng nhất
-        features = np.array(normalized_features, dtype=np.float32)
+        # Tính thêm trọng số cho giao dịch xuyên shard
+        cross_shard_weight = 0.2  # Giao dịch xuyên shard tạo thêm tắc nghẽn
+        cross_shard_factor = min(1.0, cross_shard_tx_count / max(1, tx_count))
+        cross_shard_congestion = cross_shard_factor * cross_shard_weight
         
-        # Dự đoán bằng mô hình
-        try:
-            predicted_congestion = self.congestion_predictor.predict(features)
-            # Đảm bảo giá trị trong khoảng [0, 1]
-            return float(max(0.0, min(1.0, predicted_congestion)))
-        except Exception as e:
-            # Nếu có lỗi, trả về giá trị mặc định (0.2-0.4)
-            return 0.2 + (0.2 * random.random())
-    
-    def predict_all_shard_congestion(self) -> Dict[int, float]:
+        # Tính tổng tắc nghẽn
+        total_congestion = min(1.0, base_congestion + cross_shard_congestion)
+        
+        # Thêm nhiễu ngẫu nhiên nhỏ để tránh đồng nhất
+        noise = random.uniform(-0.05, 0.05)
+        predicted_congestion = max(0.0, min(1.0, total_congestion + noise))
+        
+        # Cập nhật congestion_tensor nếu đã được khởi tạo
+        if hasattr(self, 'congestion_tensor') and self.congestion_tensor is not None:
+            num_shards = self.congestion_tensor.shape[0]
+            if shard_id < num_shards:
+                # Cập nhật mức độ tắc nghẽn từ shard này đến tất cả các shard khác
+                for i in range(num_shards):
+                    self.congestion_tensor[shard_id, i] = predicted_congestion
+                    # Tắc nghẽn khi nhận từ shard khác cũng bị ảnh hưởng
+                    self.congestion_tensor[i, shard_id] = predicted_congestion * 0.8  # Giảm nhẹ khi nhận
+        
+        return predicted_congestion
+
+    def get_statistics(self):
+        """Lấy thống kê về hiệu suất của MAD-RAPID"""
+        # Khởi tạo thống kê nếu chưa tồn tại
+        if "path_selection_stats" not in self.stats:
+            self.stats["path_selection_stats"] = {
+                "total_attempts": 0,
+                "successful_optimizations": 0,
+                "direct": 0,
+                "algorithm_usage": {"Dijkstra": 0},
+                "total_latency": 0,
+                "total_energy_saved": 0,
+                "cross_shard_transactions": 0,
+                "optimized_transactions": 0
+            }
+            
+        if "total_transactions" not in self.stats:
+            self.stats["total_transactions"] = 0
+        if "successful_transactions" not in self.stats:
+            self.stats["successful_transactions"] = 0
+        if "total_cross_shard" not in self.stats:
+            self.stats["total_cross_shard"] = 0
+        if "successful_cross_shard" not in self.stats:
+            self.stats["successful_cross_shard"] = 0
+            
+        # Tính toán các tỷ lệ
+        total_tx = self.stats.get("total_transactions", 0)
+        successful_tx = self.stats.get("successful_transactions", 0)
+        total_cross = self.stats.get("total_cross_shard", 0)
+        successful_cross = self.stats.get("successful_cross_shard", 0)
+        
+        # Lấy thống kê về độ trễ và năng lượng
+        path_stats = self.stats.get("path_selection_stats", {})
+        total_latency = path_stats.get("total_latency", 0)
+        total_energy = path_stats.get("total_energy_saved", 0)
+        total_optimizations = path_stats.get("successful_optimizations", 0)
+        
+        # Tính toán các chỉ số hiệu suất
+        success_rate = (successful_tx / total_tx * 100) if total_tx > 0 else 0.0
+        cross_shard_success_rate = (successful_cross / total_cross * 100) if total_cross > 0 else 0.0
+        average_latency = total_latency / successful_tx if successful_tx > 0 else 0.0
+        optimization_rate = (total_optimizations / total_cross * 100) if total_cross > 0 else 0.0
+        
+        return {
+            "total_transactions": total_tx,
+            "successful_transactions": successful_tx,
+            "success_rate": success_rate,
+            "cross_shard_transactions": total_cross,
+            "successful_cross_shard": successful_cross,
+            "cross_shard_success_rate": cross_shard_success_rate,
+            "average_latency": average_latency,
+            "energy_saved": total_energy,
+            "optimization_rate": optimization_rate,
+            "path_selection_stats": path_stats,
+            "performance_metrics": self.stats.get("performance_metrics", {})
+        }
+
+    def _initialize_shard_embeddings(self):
         """
-        Dự đoán mức độ tắc nghẽn cho tất cả các shard
-        
-        Returns:
-            Từ điển ánh xạ từ shard_id đến mức độ tắc nghẽn dự đoán
+        Khởi tạo các vector embedding cho các shard.
+        Vector này được sử dụng cho việc tối ưu hóa đường dẫn xuyên shard.
         """
-        # Cập nhật lịch sử đặc trưng
-        self.update_feature_history()
-        
-        # Dự đoán mức độ tắc nghẽn cho từng shard
-        predictions = {}
-        for shard_id in self.network.shards.keys():
-            predictions[shard_id] = self.predict_congestion(shard_id)
+        # Kiểm tra xem network có tồn tại không
+        if not hasattr(self, 'network') or not self.network:
+            print("Không thể khởi tạo shard_embeddings: network chưa được khởi tạo")
+            return
             
-        return predictions
-    
-    def optimize_cross_shard_path(self, source_shard_id: int, target_shard_id: int) -> List[int]:
-        """Tìm đường đi tối ưu giữa hai shard"""
-        # Kiểm tra xem đã có đường đi được cache chưa
-        cache_key = (source_shard_id, target_shard_id)
-        if cache_key in self.optimized_paths:
-            # Sử dụng lại đường đi đã tìm được với xác suất cao
-            if random.random() < 0.8:
-                return self.optimized_paths[cache_key]
-        
-        # Kiểm tra nếu đã khởi tạo embeddings cho các shard
-        if not hasattr(self, 'shard_embeddings') or len(self.shard_embeddings) == 0:
-            self._initialize_shard_embeddings()
-        
-        # Nếu không có simulation reference hoặc không có đủ số lượng shard, trả về None
-        if not hasattr(self, 'simulation') or self.simulation is None:
-            if random.random() < 0.3:  # 30% khả năng thất bại nếu không có simulation reference
-                return None
-            # Tạo đường đi mặc định nếu không có simulation
-            return [source_shard_id, target_shard_id]
-        
-        # Lấy danh sách các shard từ mạng
-        network = getattr(self.simulation, 'network', None)
-        if network is None or not hasattr(network, 'shards'):
-            if random.random() < 0.4:  # 40% khả năng thất bại nếu không có thông tin mạng
-                return None
-            # Tạo đường đi mặc định nếu không có thông tin mạng
-            return [source_shard_id, target_shard_id]
-        
-        # Lấy danh sách các shard
-        shards = list(network.shards.keys())
-        
-        # Kiểm tra source_shard và target_shard có hợp lệ không
-        if source_shard_id not in shards or target_shard_id not in shards:
-            return None
-        
-        # Khởi tạo ma trận độ trễ nếu chưa có
-        if not hasattr(self, 'latency_matrix') or self.latency_matrix is None:
-            num_shards = len(shards)
-            self.latency_matrix = np.ones((num_shards, num_shards)) * 10.0  # Giá trị mặc định 10ms
+        # Lấy số lượng shard từ network
+        num_shards = len(self.network.shards) if hasattr(self.network, 'shards') else 0
+        if num_shards == 0:
+            print("Không thể khởi tạo shard_embeddings: không có shard nào trong network")
+            return
             
-            # Cập nhật giá trị độ trễ từ thông tin shard nếu có
-            for i in shards:
-                self.latency_matrix[i, i] = 0.0  # Độ trễ trong nội bộ shard là 0
-                for j in shards:
-                    if i != j:
-                        # Giả định độ trễ tỷ lệ với khoảng cách giữa các shard
-                        self.latency_matrix[i, j] = abs(i - j) * 10.0
+        # Kích thước vector embedding
+        embedding_dim = 64  # Kích thước mặc định
         
-        # Mô phỏng quá trình tìm đường đi tối ưu dựa trên các điều kiện mạng
-        # Thời gian mạng trễ cơ bản giữa hai shard liền kề
-        base_latency = 10  # ms
+        # Khởi tạo các vector embedding ngẫu nhiên
+        self.shard_embeddings = torch.randn(num_shards, embedding_dim) / math.sqrt(embedding_dim)
         
-        # Danh sách các đường đi có thể
-        possible_paths = []
+        # Tính toán ma trận độ trễ giữa các shard (đơn giản hóa)
+        self.latency_matrix = torch.ones(num_shards, num_shards)
+        for i in range(num_shards):
+            for j in range(num_shards):
+                if i != j:
+                    # Độ trễ đơn giản - khoảng cách giữa các ID shard
+                    self.latency_matrix[i, j] = 1.0 + abs(i - j) * 0.1
+                else:
+                    # Độ trễ trong cùng một shard
+                    self.latency_matrix[i, j] = 0.1
         
-        # Đường đi trực tiếp
-        direct_path = [source_shard_id, target_shard_id]
-        direct_latency = abs(target_shard_id - source_shard_id) * base_latency
-        possible_paths.append((direct_path, direct_latency))
+        # Khởi tạo tensor tắc nghẽn (ban đầu đều bằng 0)
+        self.congestion_tensor = torch.zeros(num_shards, dtype=torch.float32)
         
-        # Thử các đường đi qua các shard trung gian
-        max_hops = min(3, len(shards) - 1)  # Giới hạn số bước nhảy
+        # Khởi tạo bộ dự đoán tắc nghẽn cho mỗi shard nếu chưa có
+        if not hasattr(self, 'congestion_predictors'):
+            self.congestion_predictors = {}
+            for shard_id in range(num_shards):
+                # Mô hình LSTM cho dự đoán tắc nghẽn
+                input_size = 8  # Kích thước vector đặc trưng
+                hidden_size = 64  # Kích thước lớp ẩn LSTM
+                num_layers = 1  # Số lớp LSTM
+                self.congestion_predictors[shard_id] = LSTMCongestionPredictor(
+                    input_size=input_size,
+                    hidden_size=hidden_size,
+                    num_layers=num_layers,
+                    output_size=1
+                )
         
-        for num_hops in range(1, max_hops + 1):
-            # Lấy các shard trung gian ngẫu nhiên
-            intermediate_shards = random.sample([s for s in shards if s != source_shard_id and s != target_shard_id], 
-                                               min(num_hops, len(shards) - 2))
+        print(f"Đã khởi tạo embeddings cho {num_shards} shard") 
+
+    def update_feature_history(self):
+        """
+        Cập nhật lịch sử đặc trưng cho các shard
+        """
+        # Đảm bảo network đã được khởi tạo
+        if not hasattr(self, 'network') or not self.network:
+            print("Không thể cập nhật feature_history: network chưa được khởi tạo")
+            return
             
-            # Tạo đường đi
-            path = [source_shard_id] + intermediate_shards + [target_shard_id]
-            
-            # Tính toán độ trễ dự kiến
-            latency = 0
-            for i in range(len(path) - 1):
-                # Độ trễ giữa hai shard phụ thuộc vào khoảng cách và độ tắc nghẽn
-                hop_distance = abs(path[i] - path[i + 1])
-                hop_latency = hop_distance * base_latency
+        # Lấy số lượng shard từ network
+        num_shards = len(self.network.shards) if hasattr(self.network, 'shards') else 0
+        if num_shards == 0:
+            print("Không thể cập nhật feature_history: không có shard nào trong network")
+            return
+        
+        # Khởi tạo feature_history nếu chưa có
+        if not hasattr(self, 'feature_history'):
+            self.feature_history = {}
+            for shard_id in range(num_shards):
+                self.feature_history[shard_id] = deque(maxlen=10)  # Lưu trữ 10 frame gần nhất
+        
+        # Khởi tạo congestion_tensor nếu chưa có
+        if not hasattr(self, 'congestion_tensor') or self.congestion_tensor is None:
+            self.congestion_tensor = torch.zeros(num_shards, dtype=torch.float32)
+        
+        # Cập nhật lịch sử đặc trưng cho mỗi shard
+        for shard_id in range(num_shards):
+            # Lấy shard từ network
+            shard = self.network.shards.get(shard_id)
+            if not shard:
+                continue
                 
-                # Thêm yếu tố tắc nghẽn nếu có thông tin
-                current_shard = network.shards.get(path[i])
-                if current_shard and hasattr(current_shard, 'congestion_level'):
-                    congestion_factor = 1.0 + current_shard.congestion_level
-                    hop_latency *= congestion_factor
-                
-                latency += hop_latency
+            # Tạo vector đặc trưng đơn giản
+            features = [
+                len(shard.transaction_pool) if hasattr(shard, 'transaction_pool') else 0,  # Số lượng giao dịch trong pool
+                len([tx for tx in shard.transaction_pool if hasattr(tx, 'is_cross_shard') and tx.is_cross_shard]) if hasattr(shard, 'transaction_pool') else 0,  # Số lượng giao dịch xuyên shard
+                getattr(shard, 'congestion', 0),  # Mức độ tắc nghẽn
+                getattr(shard, 'throughput', 0),  # Thông lượng
+                getattr(shard, 'latency', 0),  # Độ trễ
+                getattr(shard, 'block_height', 0),  # Chiều cao khối
+                float(shard_id) / num_shards,  # Vị trí tương đối
+                1.0  # Bias
+            ]
             
-            possible_paths.append((path, latency))
-        
-        # Sắp xếp các đường đi theo độ trễ tăng dần
-        possible_paths.sort(key=lambda x: x[1])
-        
-        # Đôi khi có thể không chọn được đường đi tối ưu nhất
-        if random.random() < 0.1:  # 10% khả năng chọn đường đi không tối ưu
-            chosen_path_index = min(1, len(possible_paths) - 1)  # Chọn đường đi tối ưu thứ hai nếu có
-            chosen_path = possible_paths[chosen_path_index][0]
-        else:
-            # Chọn đường đi có độ trễ thấp nhất
-            chosen_path = possible_paths[0][0]
-        
-        # Cache đường đi đã tìm được
-        self.optimized_paths[cache_key] = chosen_path
-        
-        return chosen_path
-    
-    def route_transaction(self, transaction, source_shard_id: int, target_shard_id: int) -> List[int]:
+            # Chuyển đổi thành numpy array và thêm vào lịch sử
+            feature_vector = np.array(features, dtype=np.float32)
+            
+            # Đảm bảo shard_id đã được khởi tạo trong feature_history
+            if shard_id not in self.feature_history:
+                self.feature_history[shard_id] = deque(maxlen=10)
+                
+            self.feature_history[shard_id].append(feature_vector)
+            
+            # Cập nhật congestion_tensor
+            congestion = getattr(shard, 'congestion', 0)
+            self.congestion_tensor[shard_id] = torch.tensor(congestion, dtype=torch.float32)
+            
+        # Đảm bảo congestion_tensor nằm trong khoảng [0, 1]
+        self.congestion_tensor = torch.clamp(self.congestion_tensor, 0.0, 1.0)
+
+    def process_cross_shard_transaction(self, transaction, source_shard_id=None, target_shard_id=None):
         """
-        Định tuyến giao dịch giữa các shard
+        Xử lý giao dịch chéo shard bằng cách tìm đường đi tối ưu
         
         Args:
-            transaction: Giao dịch cần định tuyến
+            transaction: Giao dịch cần xử lý
+            source_shard_id: ID shard nguồn (nếu không được cung cấp, sẽ sử dụng transaction.source_shard)
+            target_shard_id: ID shard đích (nếu không được cung cấp, sẽ sử dụng transaction.target_shard)
+            
+        Returns:
+            bool: True nếu thành công, False nếu thất bại
+        """
+        try:
+            # Khởi tạo thống kê nếu chưa có
+            if not hasattr(self, 'stats'):
+                self.stats = {}
+            if 'path_selection_stats' not in self.stats:
+                self.stats['path_selection_stats'] = {
+                    'total_attempts': 0,
+                    'successful_optimizations': 0,
+                    'direct_paths': 0,
+                    'algorithm_usage': {'Dijkstra': 0},
+                    'total_latency': 0,
+                    'total_energy_saved': 0
+                }
+            if 'cross_shard_tx_stats' not in self.stats:
+                self.stats['cross_shard_tx_stats'] = {
+                    'total_attempts': 0,
+                    'successful': 0,
+                    'failed': 0,
+                    'energy_saved': 0
+                }
+                
+            # Cập nhật số lần thử
+            self.stats['cross_shard_tx_stats']['total_attempts'] = self.stats['cross_shard_tx_stats'].get('total_attempts', 0) + 1
+            
+            # Xác định shard nguồn và đích
+            actual_source_shard_id = source_shard_id
+            actual_target_shard_id = target_shard_id
+            
+            # Nếu không cung cấp source_shard_id, sử dụng từ transaction
+            if actual_source_shard_id is None:
+                if hasattr(transaction, 'source_shard'):
+                    actual_source_shard_id = transaction.source_shard
+                else:
+                    print("Lỗi: Không thể xác định shard nguồn")
+                    self.stats['cross_shard_tx_stats']['failed'] = self.stats['cross_shard_tx_stats'].get('failed', 0) + 1
+                    return False
+                    
+            # Nếu không cung cấp target_shard_id, sử dụng từ transaction
+            if actual_target_shard_id is None:
+                if hasattr(transaction, 'target_shard'):
+                    actual_target_shard_id = transaction.target_shard
+                else:
+                    print("Lỗi: Không thể xác định shard đích")
+                    self.stats['cross_shard_tx_stats']['failed'] = self.stats['cross_shard_tx_stats'].get('failed', 0) + 1
+                    return False
+                    
+            print(f"Xử lý giao dịch chéo shard từ {actual_source_shard_id} đến {actual_target_shard_id}")
+            
+            # Nếu nguồn và đích giống nhau, thực hiện trực tiếp
+            if actual_source_shard_id == actual_target_shard_id:
+                print(f"Nguồn và đích giống nhau ({actual_source_shard_id}), thực hiện trực tiếp")
+                result = self._execute_transaction(transaction, actual_source_shard_id, actual_target_shard_id)
+                if result:
+                    self.stats['cross_shard_tx_stats']['successful'] = self.stats['cross_shard_tx_stats'].get('successful', 0) + 1
+                else:
+                    self.stats['cross_shard_tx_stats']['failed'] = self.stats['cross_shard_tx_stats'].get('failed', 0) + 1
+                return result
+            
+            # Tìm đường đi tối ưu
+            try:
+                optimal_path = self._optimize_path(actual_source_shard_id, actual_target_shard_id, transaction)
+                
+                # Cập nhật thống kê về giao dịch đã tối ưu hóa
+                if optimal_path and len(optimal_path) > 2:  # Nếu đường đi có nhiều hơn 2 shard (không phải đường đi trực tiếp)
+                    if 'path_selection_stats' not in self.stats:
+                        self.stats['path_selection_stats'] = {}
+                    if 'optimized_transactions' not in self.stats['path_selection_stats']:
+                        self.stats['path_selection_stats']['optimized_transactions'] = 0
+                    self.stats['path_selection_stats']['optimized_transactions'] += 1
+                    print(f"Đã tối ưu hóa giao dịch với đường đi: {optimal_path}")
+                
+                if optimal_path and len(optimal_path) > 0:
+                    print(f"Tìm thấy đường đi tối ưu: {optimal_path}")
+                    
+                    # Thực hiện giao dịch theo đường đi tối ưu
+                    current_shard = actual_source_shard_id
+                    success = True
+                    
+                    for next_shard in optimal_path[1:]:  # Bỏ qua shard đầu tiên vì đó là nguồn
+                        # Chuyển đổi tensor thành số nguyên nếu cần
+                        if isinstance(current_shard, torch.Tensor):
+                            current_shard = current_shard.item()
+                        if isinstance(next_shard, torch.Tensor):
+                            next_shard = next_shard.item()
+                            
+                        print(f"Chuyển giao dịch từ shard {current_shard} đến shard {next_shard}")
+                        if not self._execute_transaction(transaction, current_shard, next_shard):
+                            print(f"Lỗi khi chuyển từ shard {current_shard} đến shard {next_shard}")
+                            success = False
+                            break
+                        current_shard = next_shard
+                        
+                    if success:
+                        print(f"Giao dịch chéo shard thành công theo đường đi: {optimal_path}")
+                        self.stats['cross_shard_tx_stats']['successful'] = self.stats['cross_shard_tx_stats'].get('successful', 0) + 1
+                        
+                        # Tính toán năng lượng tiết kiệm được
+                        try:
+                            direct_energy = self._calculate_energy_cost(actual_source_shard_id, actual_target_shard_id)
+                            path_energy = 0
+                            for i in range(len(optimal_path)-1):
+                                if i < len(optimal_path) and i+1 < len(optimal_path):  # Kiểm tra chỉ số hợp lệ
+                                    path_energy += self._calculate_energy_cost(optimal_path[i], optimal_path[i+1])
+                            energy_saved = max(0, direct_energy - path_energy)
+                            
+                            self.stats['cross_shard_tx_stats']['energy_saved'] = self.stats['cross_shard_tx_stats'].get('energy_saved', 0) + energy_saved
+                            print(f"Tiết kiệm được {energy_saved} đơn vị năng lượng")
+                            
+                            # Cập nhật thống kê với đường đi tối ưu
+                            self._update_statistics(transaction, optimal_path, direct_energy - path_energy, energy_saved)
+                            
+                            # In thông tin debug về thống kê
+                            print("DEBUG STATS:", self.stats)
+                        except Exception as e:
+                            print(f"Lỗi khi tính toán chi phí năng lượng: {e}")
+                            energy_saved = 0
+                            
+                        return True
+                    else:
+                        print("Giao dịch chéo shard thất bại, thử thực hiện trực tiếp")
+                else:
+                    print("Không tìm thấy đường đi tối ưu, thử thực hiện trực tiếp")
+                    
+                # Nếu không tìm được đường đi tối ưu hoặc thất bại, thử thực hiện trực tiếp
+                result = self._execute_transaction(transaction, actual_source_shard_id, actual_target_shard_id)
+                if result:
+                    self.stats['cross_shard_tx_stats']['successful'] = self.stats['cross_shard_tx_stats'].get('successful', 0) + 1
+                    print("Giao dịch trực tiếp thành công")
+                    # Cập nhật thống kê với đường đi trực tiếp
+                    direct_path = [actual_source_shard_id, actual_target_shard_id]
+                    self._update_statistics(transaction, direct_path, 0, 0)
+                else:
+                    self.stats['cross_shard_tx_stats']['failed'] = self.stats['cross_shard_tx_stats'].get('failed', 0) + 1
+                    print("Giao dịch trực tiếp thất bại")
+                    
+                return result
+                
+            except Exception as e:
+                print(f"Lỗi khi tối ưu đường đi: {e}")
+                # Thử thực hiện trực tiếp nếu tối ưu thất bại
+                result = self._execute_transaction(transaction, actual_source_shard_id, actual_target_shard_id)
+                if result:
+                    self.stats['cross_shard_tx_stats']['successful'] = self.stats['cross_shard_tx_stats'].get('successful', 0) + 1
+                    print("Giao dịch trực tiếp thành công sau lỗi tối ưu")
+                    # Cập nhật thống kê với đường đi trực tiếp
+                    direct_path = [actual_source_shard_id, actual_target_shard_id]
+                    self._update_statistics(transaction, direct_path, 0, 0)
+                else:
+                    self.stats['cross_shard_tx_stats']['failed'] = self.stats['cross_shard_tx_stats'].get('failed', 0) + 1
+                    print("Giao dịch trực tiếp thất bại sau lỗi tối ưu")
+                return result
+            
+        except Exception as e:
+            print(f"Lỗi khi xử lý giao dịch chéo shard: {e}")
+            self.stats['cross_shard_tx_stats']['failed'] = self.stats['cross_shard_tx_stats'].get('failed', 0) + 1
+            return False
+
+    def _compute_transaction_state(self, transaction, source_shard_id, target_shard_id):
+        """
+        Tính toán vector trạng thái cho giao dịch, sử dụng cho DQN agent
+        
+        Args:
+            transaction: Giao dịch cần tính toán trạng thái
             source_shard_id: ID shard nguồn
             target_shard_id: ID shard đích
             
         Returns:
-            Danh sách các shard IDs tạo thành đường dẫn
+            numpy.ndarray: Vector trạng thái
         """
-        # Ước tính kích thước giao dịch
-        tx_size = transaction.data.get('size', 2048) if hasattr(transaction, 'data') else 2048
-        
-        # Tìm đường dẫn tối ưu
-        path = self.optimize_cross_shard_path(source_shard_id, target_shard_id)
-        
-        return path
-    
-    def compress_transaction(self, transaction, congestion_level: float) -> Any:
-        """
-        Nén giao dịch dựa trên mức độ tắc nghẽn
-        
-        Args:
-            transaction: Giao dịch cần nén
-            congestion_level: Mức độ tắc nghẽn của đường dẫn
-            
-        Returns:
-            Giao dịch đã được nén
-        """
-        # Mức độ nén dựa trên mức độ tắc nghẽn
-        if congestion_level > 0.8:
-            # Nén cao cho tắc nghẽn cao
-            compression_level = 3  # Tương ứng với mức nén cao nhất
-        elif congestion_level > 0.5:
-            # Nén trung bình
-            compression_level = 2
-        else:
-            # Nén nhẹ hoặc không nén
-            compression_level = 1
-            
-        # Trong mô phỏng, chúng ta chỉ thiết lập cấp độ nén
-        # Trong triển khai thực tế, thực hiện nén thực sự ở đây
-        if hasattr(transaction, 'data'):
-            if isinstance(transaction.data, dict):
-                transaction.data['compression_level'] = compression_level
-            else:
-                transaction.data = {'compression_level': compression_level}
+        try:
+            # Kiểm tra tính hợp lệ của shard IDs
+            if source_shard_id is None or target_shard_id is None:
+                # Trả về vector zero nếu không hợp lệ
+                return np.zeros(10, dtype=np.float32)
                 
-        return transaction
-    
-    def process_cross_shard_transaction(self, transaction) -> bool:
-        """
-        Xử lý giao dịch xuyên mảnh sử dụng giao thức MAD-RAPID
-        
-        Args:
-            transaction: Giao dịch cần xử lý
+            # Lấy thông tin cơ bản từ giao dịch
+            tx_size = getattr(transaction, 'size', 1.0)  # Kích thước giao dịch
+            tx_complexity = getattr(transaction, 'complexity', 1.0)  # Độ phức tạp
+            tx_priority = getattr(transaction, 'priority', 1.0)  # Ưu tiên
             
-        Returns:
-            Kết quả xử lý (True nếu thành công)
-        """
-        # Ghi lại giao dịch vào danh sách đã xử lý
-        transaction_id = getattr(transaction, 'transaction_id', str(id(transaction)))
-        
-        # Đảm bảo processed_transactions đã được khởi tạo
-        if not hasattr(self, 'processed_transactions'):
-            self.processed_transactions = {}
+            # Lấy thông tin shard nguồn
+            source_shard = self.network.shards.get(source_shard_id)
+            source_congestion = getattr(source_shard, 'congestion', 0.0) if source_shard else 0.0
+            source_tx_pool = getattr(source_shard, 'transaction_pool', {})
+            source_tx_count = len(source_tx_pool) if source_tx_pool is not None else 0
             
-        self.processed_transactions[transaction_id] = transaction
-        
-        # Đảm bảo các biến thống kê tồn tại
-        if not hasattr(self, 'total_tx_processed'):
-            self.total_tx_processed = 0
-        if not hasattr(self, 'optimized_tx_count'):
-            self.optimized_tx_count = 0
-        
-        self.total_tx_processed += 1
-        
-        # Lấy thông tin shard nguồn và đích
-        source_shard = getattr(transaction, 'source_shard', 0)
-        target_shard = getattr(transaction, 'target_shard', 0)
-        
-        print(f"MAD-RAPID đang xử lý giao dịch {transaction_id} từ shard {source_shard} đến shard {target_shard}")
-        
-        # Đánh dấu giao dịch là xuyên shard (nếu chưa được đánh dấu)
-        if source_shard != target_shard:
-            transaction.is_cross_shard = True
-        
-        # Nếu không phải giao dịch xuyên shard, trả về luôn
-        if source_shard == target_shard:
-            transaction.status = "processed"
-            print(f"Giao dịch {transaction_id} không phải xuyên shard, đã xử lý thành công")
-            return True  # Trả về True thay vì transaction
-        
-        # Cập nhật điều kiện mạng nếu có thể
-        self.update_feature_history()
-        
-        # Tính toán xác suất tối ưu dựa trên điều kiện mạng và độ phức tạp giao dịch
-        base_optimization_chance = 0.95  # Tăng tỷ lệ cơ bản cho việc tối ưu hóa
-        
-        # Hiệu chỉnh dựa trên khoảng cách giữa các shard
-        distance = abs(source_shard - target_shard)
-        distance_factor = max(0.8, 1.0 - (distance * 0.03))  # Giảm ảnh hưởng của khoảng cách
-        
-        # Hiệu chỉnh dựa trên kích thước giao dịch (nếu có)
-        size_factor = 1.0
-        if hasattr(transaction, 'size'):
-            size_kb = transaction.size / 1024
-            size_factor = max(0.8, 1.0 - (size_kb * 0.005))  # Giảm ảnh hưởng của kích thước
-        
-        # Hiệu chỉnh dựa trên độ tắc nghẽn mạng
-        congestion_factor = 1.0
-        if hasattr(self, 'simulation') and self.simulation and hasattr(self.simulation, 'current_congestion'):
-            congestion_penalty = self.simulation.current_congestion * 0.2  # Giảm ảnh hưởng của tắc nghẽn
-            congestion_factor = max(0.8, 1.0 - congestion_penalty)
-        
-        # Tính toán xác suất cuối cùng
-        optimization_chance = base_optimization_chance * distance_factor * size_factor * congestion_factor
-        optimization_chance = max(0.7, min(0.98, optimization_chance))  # Tăng giới hạn dưới và trên
-        
-        # In thông tin gỡ lỗi
-        print(f"Xác suất tối ưu hóa: {optimization_chance:.2f} (base={base_optimization_chance:.2f}, distance={distance_factor:.2f}, size={size_factor:.2f}, congestion={congestion_factor:.2f})")
-        
-        # Sử dụng DQN Agent nếu có
-        is_optimized = True
-        path = None
-        
-        # Kiểm tra xem có DQN agents không
-        if hasattr(self, 'dqn_agents') and self.dqn_agents and source_shard in self.dqn_agents:
-            # Lấy agent cho shard nguồn
-            agent = self.dqn_agents[source_shard]
+            # Lấy thông tin shard đích
+            target_shard = self.network.shards.get(target_shard_id)
+            target_congestion = getattr(target_shard, 'congestion', 0.0) if target_shard else 0.0
+            target_tx_pool = getattr(target_shard, 'transaction_pool', {})
+            target_tx_count = len(target_tx_pool) if target_tx_pool is not None else 0
             
-            # Lấy trạng thái hiện tại của shard
-            state = self._get_shard_state(source_shard)
+            # Tính toán độ trễ trực tiếp giữa nguồn và đích
+            direct_latency = self._estimate_direct_latency(source_shard_id, target_shard_id)
             
-            # Sử dụng agent để chọn hành động
-            action = agent.select_action(state)
+            # Tính toán khoảng cách giữa nguồn và đích
+            distance = abs(source_shard_id - target_shard_id)
             
-            # Hành động: 0 = tối ưu hóa đường đi, 1 = sử dụng đường đi trực tiếp, 2 = từ chối giao dịch
-            if action == 0:
-                # Tối ưu hóa đường đi
-                print(f"DQN Agent quyết định tối ưu hóa đường đi cho giao dịch {transaction_id}")
-                path = self.optimize_cross_shard_path(source_shard, target_shard)
-                is_optimized = path is not None
-            elif action == 1:
-                # Sử dụng đường đi trực tiếp
-                print(f"DQN Agent quyết định sử dụng đường đi trực tiếp cho giao dịch {transaction_id}")
-                path = [source_shard, target_shard]
-                is_optimized = True
-            else:
-                # Từ chối giao dịch
-                print(f"DQN Agent quyết định từ chối giao dịch {transaction_id}")
-                is_optimized = False
-                
-            # Tính toán phần thưởng dựa trên kết quả
-            reward = 0
-            if is_optimized:
-                # Phần thưởng dương nếu tối ưu hóa thành công
-                reward = 1.0 * optimization_chance
-                if path and len(path) > 2:
-                    # Phần thưởng cao hơn nếu tìm được đường đi phức tạp
-                    reward += 0.5
-            else:
-                # Phần thưởng âm nếu từ chối giao dịch
-                reward = -0.5
-                
-            # Cập nhật agent với phần thưởng
-            agent.reward(reward)
-            
-            # Huấn luyện agent
-            if agent.is_training:
-                agent.train()
-        else:
-            # Nếu không có DQN agent, sử dụng phương pháp mặc định
-            path = self.optimize_cross_shard_path(source_shard, target_shard)
-            is_optimized = path is not None
-        
-        if is_optimized:
-            # Xử lý thành công nếu tìm được đường đi tối ưu
-            if path:
-                transaction.status = "processed"
-                transaction.optimized_path = path
-                self.optimized_tx_count += 1
-                # Thống kê
-                if not hasattr(self, 'optimized_paths'):
-                    self.optimized_paths = {}
-                self.optimized_paths[(source_shard, target_shard)] = path
-                print(f"Tối ưu hóa thành công giao dịch {transaction_id} từ shard {source_shard} đến shard {target_shard} với đường đi {path}")
-                
-                # Cập nhật số lượng giao dịch xuyên shard thành công cho các shard liên quan
-                if hasattr(self, 'network') and self.network:
-                    for shard_id in path:
-                        if shard_id in self.network.shards:
-                            shard = self.network.shards[shard_id]
-                            if not hasattr(shard, 'successful_cs_tx_count'):
-                                shard.successful_cs_tx_count = 0
-                            shard.successful_cs_tx_count += 1
-                
-                # Cập nhật số lượng giao dịch xuyên shard thành công
-                if not hasattr(self, 'cross_shard_success_count'):
-                    self.cross_shard_success_count = 0
-                self.cross_shard_success_count += 1
-                
-                return True
-        
-        # Nếu không thể tối ưu hóa, đánh dấu là thất bại
-        transaction.status = "failed"
-        print(f"Không thể tối ưu hóa giao dịch {transaction_id}")
-        return False
-        
-    def _get_shard_state(self, shard_id):
-        """
-        Lấy trạng thái hiện tại của shard để sử dụng cho DQN
-        
-        Args:
-            shard_id: ID của shard cần lấy trạng thái
-            
-        Returns:
-            Mảng numpy chứa trạng thái của shard
-        """
-        import numpy as np
-        
-        # Khởi tạo trạng thái mặc định
-        state = np.zeros(8)
-        
-        # Lấy thông tin shard từ network nếu có
-        if hasattr(self, 'network') and self.network and hasattr(self.network, 'shards'):
-            if shard_id in self.network.shards:
-                shard = self.network.shards[shard_id]
-                
-                # Lấy các đặc trưng từ shard
-                state[0] = len(getattr(shard, 'transaction_queue', [])) / 100.0  # Kích thước hàng đợi giao dịch
-                state[1] = getattr(shard, 'latency', 0) / 1000.0  # Độ trễ
-                state[2] = getattr(shard, 'congestion_level', 0)  # Mức độ tắc nghẽn
-                state[3] = len(getattr(shard, 'nodes', [])) / 10.0  # Số lượng node
-                state[4] = getattr(shard, 'throughput', 0) / 100.0  # Throughput
-                state[5] = getattr(shard, 'cross_shard_tx_count', 0) / 50.0  # Số lượng giao dịch xuyên shard
-                state[6] = getattr(shard, 'total_gas_used', 0) / 1000000.0  # Tổng gas đã sử dụng
-                state[7] = getattr(shard, 'total_fees', 0) / 1000.0  # Tổng phí giao dịch
-        
-        return state
-    
-    def get_statistics(self) -> Dict[str, Any]:
-        """
-        Trả về thống kê của mô-đun MAD-RAPID
-        
-        Returns:
-            Dict: Thống kê hiệu suất
-        """
-        # Đảm bảo các biến thống kê tồn tại
-        if not hasattr(self, 'total_tx_processed'):
-            self.total_tx_processed = 0
-        if not hasattr(self, 'optimized_tx_count'):
-            self.optimized_tx_count = 0
-        
-        # Tính toán các thống kê nâng cao
-        total_tx = self.total_tx_processed
-        optimized_tx = self.optimized_tx_count
-        optimization_rate = optimized_tx / max(1, total_tx)
-        
-        # Tính toán độ trễ trung bình giữa các shard
-        avg_latency = {}
-        
-        # Tính toán độ tắc nghẽn trung bình
-        shard_congestion = {}
-        
-        # Lấy thông tin về mạng và simulation nếu có
-        network = getattr(self, 'network', None)
-        simulation = getattr(self, 'simulation', None)
-        
-        # Nếu có mạng, lấy thông tin về độ trễ và tắc nghẽn của từng shard
-        if network and hasattr(network, 'shards'):
-            for shard_id, shard in network.shards.items():
-                # Lấy độ trễ
-                if hasattr(shard, 'latency'):
-                    avg_latency[shard_id] = shard.latency
-                else:
-                    avg_latency[shard_id] = 10.0  # Giá trị mặc định
+            # Kiểm tra nếu có shard embeddings
+            similarity = 0.0
+            if hasattr(self, 'shard_embeddings') and self.shard_embeddings is not None:
+                if source_shard_id < len(self.shard_embeddings) and target_shard_id < len(self.shard_embeddings):
+                    # Tính độ tương đồng cosine
+                    source_embed = self.shard_embeddings[source_shard_id]
+                    target_embed = self.shard_embeddings[target_shard_id]
                     
-                # Lấy độ tắc nghẽn
-                if hasattr(shard, 'congestion_level'):
-                    shard_congestion[shard_id] = shard.congestion_level
-                else:
-                    shard_congestion[shard_id] = 0.0  # Giá trị mặc định
+                    # Sử dụng F.cosine_similarity nếu tensor có đủ chiều
+                    try:
+                        if len(source_embed.shape) == 1 and len(target_embed.shape) == 1:
+                            source_embed = source_embed.unsqueeze(0)
+                            target_embed = target_embed.unsqueeze(0)
+                        similarity = F.cosine_similarity(source_embed, target_embed).item()
+                    except Exception as e:
+                        print(f"Lỗi khi tính cosine similarity: {str(e)}")
+                        # Tính theo công thức thủ công
+                        dot_product = torch.dot(source_embed, target_embed).item()
+                        source_norm = torch.norm(source_embed).item()
+                        target_norm = torch.norm(target_embed).item()
+                        if source_norm > 0 and target_norm > 0:
+                            similarity = dot_product / (source_norm * target_norm)
+                        else:
+                            similarity = 0.0
+            
+            # Tạo vector trạng thái
+            state = np.array([
+                tx_size / 10.0,  # Chuẩn hóa kích thước giao dịch
+                tx_complexity / 5.0,  # Chuẩn hóa độ phức tạp
+                tx_priority / 3.0,  # Chuẩn hóa ưu tiên
+                source_congestion,  # Tắc nghẽn shard nguồn
+                target_congestion,  # Tắc nghẽn shard đích
+                source_tx_count / 100.0,  # Chuẩn hóa số giao dịch nguồn
+                target_tx_count / 100.0,  # Chuẩn hóa số giao dịch đích
+                direct_latency / 100.0,  # Chuẩn hóa độ trễ
+                distance / 10.0,  # Chuẩn hóa khoảng cách
+                (similarity + 1) / 2.0  # Chuyển [-1, 1] thành [0, 1]
+            ], dtype=np.float32)
+            
+            return state
+            
+        except Exception as e:
+            print(f"Lỗi trong _compute_transaction_state: {str(e)}")
+            # Trả về vector zero nếu có lỗi
+            return np.zeros(10, dtype=np.float32)
+
+    def _optimize_path(self, source_shard_id, target_shard_id, transaction=None):
+        """
+        Tìm đường đi tối ưu giữa hai shard dựa trên độ trễ, tắc nghẽn và các yếu tố khác
         
-        # Nếu không có thông tin mạng, tạo giá trị ngẫu nhiên thực tế
-        if not avg_latency:
-            for i in range(getattr(self, 'num_shards', 4)):
-                avg_latency[i] = 10.0 + random.random() * 20.0  # 10-30ms
-        
-        if not shard_congestion:
-            for i in range(getattr(self, 'num_shards', 4)):
-                shard_congestion[i] = random.random() * 0.5  # 0-50% congestion
-        
-        # Tính toán cải thiện độ trễ và tiết kiệm năng lượng
-        latency_improvement = 0.0
-        energy_saved = 0.0
-        
-        # Nếu có dữ liệu về đường dẫn đã tối ưu hóa, tính toán cải thiện
-        if self.optimized_paths:
-            for path_key, path in self.optimized_paths.items():
-                source, target = path_key
-                # Độ trễ theo đường dẫn trực tiếp
-                direct_latency = abs(target - source) * 10.0  # Giả sử 10ms cho mỗi bước nhảy
+        Args:
+            source_shard_id: ID shard nguồn
+            target_shard_id: ID shard đích
+            transaction: Giao dịch cần tối ưu đường đi (tùy chọn)
+            
+        Returns:
+            list: Danh sách các shard IDs tạo thành đường đi tối ưu, hoặc None nếu không tìm thấy
+        """
+        try:
+            # Khởi tạo thống kê nếu chưa có
+            if not hasattr(self, 'stats'):
+                self.stats = {}
+            if 'path_selection_stats' not in self.stats:
+                self.stats['path_selection_stats'] = {
+                    'total_attempts': 0,
+                    'successful_optimizations': 0,
+                    'direct_paths': 0,
+                    'algorithm_usage': {'Dijkstra': 0},
+                    'total_latency': 0,
+                    'total_energy_saved': 0,
+                    'optimized_transactions': 0
+                }
                 
-                # Độ trễ theo đường dẫn tối ưu
-                optimized_latency = 0.0
-                for i in range(len(path) - 1):
-                    hop_latency = abs(path[i+1] - path[i]) * 10.0
-                    optimized_latency += hop_latency
+            # Cập nhật số lần thử
+            self.stats['path_selection_stats']['total_attempts'] = self.stats['path_selection_stats'].get('total_attempts', 0) + 1
+            
+            # Kiểm tra tính hợp lệ của đầu vào
+            if source_shard_id is None or target_shard_id is None:
+                print(f"Lỗi: source_shard_id hoặc target_shard_id là None")
+                return None
                 
-                # Cải thiện độ trễ
-                hop_improvement = max(0, direct_latency - optimized_latency)
-                latency_improvement += hop_improvement
+            # Nếu nguồn và đích giống nhau, trả về đường đi trực tiếp
+            if source_shard_id == target_shard_id:
+                self.stats['path_selection_stats']['direct_paths'] = self.stats['path_selection_stats'].get('direct_paths', 0) + 1
+                return [source_shard_id]
                 
-                # Tiết kiệm năng lượng (giả định)
-                energy_per_hop = 5.0
-                energy_saved += max(0, direct_latency - optimized_latency) * energy_per_hop / 10.0
+            # Tạo ma trận độ trễ và tensor tắc nghẽn nếu chưa được khởi tạo
+            if not hasattr(self, 'latency_matrix') or self.latency_matrix is None:
+                print("Khởi tạo ma trận độ trễ")
+                num_shards = len(self.network.shards)
+                self.latency_matrix = torch.rand((num_shards, num_shards)) * 100  # Độ trễ ngẫu nhiên từ 0-100ms
+                # Đặt độ trễ từ một shard đến chính nó là 0
+                for i in range(num_shards):
+                    self.latency_matrix[i, i] = 0
+                    
+            if not hasattr(self, 'congestion_tensor') or self.congestion_tensor is None:
+                print("Khởi tạo tensor tắc nghẽn")
+                num_shards = len(self.network.shards)
+                self.congestion_tensor = torch.zeros((num_shards, num_shards))
+                
+            # Lấy số lượng shard
+            num_shards = self.latency_matrix.shape[0]
+            
+            # Kiểm tra tính hợp lệ của chỉ số shard
+            if source_shard_id >= num_shards or target_shard_id >= num_shards:
+                print(f"Lỗi: Chỉ số shard không hợp lệ: {source_shard_id}, {target_shard_id}, num_shards={num_shards}")
+                return [source_shard_id, target_shard_id]
+            
+            # Tạo ma trận trọng số cho thuật toán Dijkstra
+            weight_matrix = torch.zeros((num_shards, num_shards))
+            
+            # Tính toán trọng số dựa trên độ trễ và tắc nghẽn
+            for i in range(num_shards):
+                for j in range(num_shards):
+                    try:
+                        if i == j:
+                            weight_matrix[i, j] = 0  # Không có trọng số từ một shard đến chính nó
+                        else:
+                            # Trọng số là tổng hợp của độ trễ và tắc nghẽn
+                            latency_weight = self.latency_matrix[i, j].item()
+                            
+                            # Đảm bảo congestion_tensor có đúng kích thước
+                            congestion_weight = 0
+                            if i < self.congestion_tensor.shape[0] and j < self.congestion_tensor.shape[1]:
+                                congestion_weight = self.congestion_tensor[i, j].item() * 50  # Nhân với hệ số để tăng ảnh hưởng
+                            
+                            # Nếu có giao dịch, xem xét kích thước và độ phức tạp
+                            transaction_weight = 0
+                            if transaction is not None:
+                                if hasattr(transaction, 'size'):
+                                    transaction_weight += transaction.size * 0.1
+                                if hasattr(transaction, 'complexity'):
+                                    transaction_weight += transaction.complexity * 0.2
+                                if hasattr(transaction, 'priority'):
+                                    # Ưu tiên cao sẽ giảm trọng số
+                                    transaction_weight -= transaction.priority * 0.3
+                                    
+                            # Tổng hợp trọng số
+                            weight_matrix[i, j] = latency_weight + congestion_weight + transaction_weight
+                    except Exception as e:
+                        print(f"Lỗi khi tính toán trọng số cho ({i}, {j}): {e}")
+                        # Đặt giá trị mặc định cao để tránh chọn đường đi này
+                        weight_matrix[i, j] = 1000.0
+            
+            # Đảm bảo không có trọng số âm
+            weight_matrix = torch.clamp(weight_matrix, min=0.1)
+            
+            # Thuật toán Dijkstra để tìm đường đi ngắn nhất
+            distances = torch.full((num_shards,), float('inf'))
+            distances[source_shard_id] = 0
+            previous = torch.full((num_shards,), -1, dtype=torch.long)
+            visited = torch.zeros(num_shards, dtype=torch.bool)
+            
+            for _ in range(num_shards):
+                # Tìm shard chưa thăm có khoảng cách nhỏ nhất
+                min_distance = float('inf')
+                min_index = -1
+                for i in range(num_shards):
+                    if not visited[i] and distances[i] < min_distance:
+                        min_distance = distances[i]
+                        min_index = i
+                        
+                if min_index == -1 or min_index == target_shard_id:
+                    break
+                    
+                visited[min_index] = True
+                
+                # Cập nhật khoảng cách cho các shard kề
+                for i in range(num_shards):
+                    if not visited[i] and weight_matrix[min_index, i] > 0:
+                        new_distance = distances[min_index] + weight_matrix[min_index, i]
+                        if new_distance < distances[i]:
+                            distances[i] = new_distance
+                            previous[i] = min_index
+                            
+            # Xây dựng đường đi từ nguồn đến đích
+            if distances[target_shard_id] == float('inf'):
+                print(f"Không tìm thấy đường đi từ shard {source_shard_id} đến shard {target_shard_id}")
+                self.stats['path_selection_stats']['direct_paths'] = self.stats['path_selection_stats'].get('direct_paths', 0) + 1
+                return [source_shard_id, target_shard_id]  # Trả về đường đi trực tiếp nếu không tìm thấy đường đi tối ưu
+                
+            # Xây dựng đường đi
+            path = []
+            current = target_shard_id
+            while current != -1:
+                path.append(current)
+                current = previous[current]
+                
+            # Đảo ngược đường dẫn
+            path = path[::-1]
+            
+            # Đảm bảo path chỉ chứa số nguyên, không phải tensor
+            path = [p.item() if isinstance(p, torch.Tensor) else p for p in path]
+            
+            # Kiểm tra xem đường đi có bắt đầu từ nguồn không
+            if path[0] != source_shard_id:
+                print(f"Lỗi: Đường đi không bắt đầu từ shard nguồn {source_shard_id}, mà từ {path[0]}")
+                path = [source_shard_id] + path
+                
+            # Cập nhật thống kê
+            self.stats['path_selection_stats']['successful_optimizations'] = self.stats['path_selection_stats'].get('successful_optimizations', 0) + 1
+            self.stats['path_selection_stats']['algorithm_usage']['Dijkstra'] = self.stats['path_selection_stats']['algorithm_usage'].get('Dijkstra', 0) + 1
+            
+            # Tính toán độ trễ và năng lượng tiết kiệm được
+            total_latency = 0
+            for i in range(len(path)-1):
+                if i < len(path) and i+1 < len(path) and path[i] < self.latency_matrix.shape[0] and path[i+1] < self.latency_matrix.shape[1]:
+                    total_latency += self.latency_matrix[path[i], path[i+1]].item()
+                    
+            # Đảm bảo chỉ số hợp lệ khi truy cập latency_matrix
+            if source_shard_id < self.latency_matrix.shape[0] and target_shard_id < self.latency_matrix.shape[1]:
+                direct_latency = self.latency_matrix[source_shard_id, target_shard_id].item()
+            else:
+                direct_latency = 100.0  # Giá trị mặc định nếu chỉ số không hợp lệ
+                
+            energy_saved = max(0, direct_latency - total_latency)
+            
+            self.stats['path_selection_stats']['total_latency'] = self.stats['path_selection_stats'].get('total_latency', 0) + total_latency
+            self.stats['path_selection_stats']['total_energy_saved'] = self.stats['path_selection_stats'].get('total_energy_saved', 0) + energy_saved
+            
+            print(f"Tìm thấy đường đi tối ưu: {path}")
+            return path
+            
+        except Exception as e:
+            print(f"Lỗi khi tối ưu đường đi: {e}")
+            # Trả về đường đi trực tiếp trong trường hợp lỗi
+            self.stats['path_selection_stats']['direct_paths'] = self.stats['path_selection_stats'].get('direct_paths', 0) + 1
+            return [source_shard_id, target_shard_id]
+
+    def _estimate_direct_latency(self, source_shard_id, target_shard_id):
+        """
+        Ước tính độ trễ của đường dẫn trực tiếp giữa hai shard
         
-        # Tạo thống kê
-        stats = {
-            "total_transactions": total_tx,
-            "optimized_transactions": optimized_tx,
-            "optimization_rate": optimization_rate,
-            "latency_improvement": latency_improvement,
-            "energy_saved": energy_saved,
-            "shard_congestion": shard_congestion,
-            "shard_latency": avg_latency
-        }
+        Args:
+            source_shard_id: ID shard nguồn
+            target_shard_id: ID shard đích
+            
+        Returns:
+            float: Độ trễ ước tính (ms)
+        """
+        # Kiểm tra tính hợp lệ của IDs
+        if source_shard_id is None or target_shard_id is None:
+            return 100.0  # Giá trị mặc định cao
         
-        return stats 
+        # Kiểm tra nếu có latency matrix
+        if hasattr(self, 'latency_matrix') and self.latency_matrix is not None:
+            # Đảm bảo index trong khoảng hợp lệ
+            if (0 <= source_shard_id < self.latency_matrix.shape[0] and 
+                0 <= target_shard_id < self.latency_matrix.shape[1]):
+                # Lấy độ trễ từ ma trận và chuyển về ms
+                latency = self.latency_matrix[source_shard_id, target_shard_id].item() * 50.0
+                return latency
+        
+        # Nếu không có ma trận, tính dựa trên khoảng cách
+        distance = abs(source_shard_id - target_shard_id)
+        base_latency = 50.0  # Độ trễ cơ bản (ms)
+        distance_factor = distance * 10.0  # 10ms cho mỗi đơn vị khoảng cách
+        
+        # Thêm yếu tố tắc nghẽn nếu có
+        congestion_factor = 0.0
+        if hasattr(self, 'congestion_tensor') and self.congestion_tensor is not None:
+            if (0 <= source_shard_id < len(self.congestion_tensor) and 
+                0 <= target_shard_id < len(self.congestion_tensor)):
+                source_congestion = self.congestion_tensor[source_shard_id].item()
+                target_congestion = self.congestion_tensor[target_shard_id].item()
+                congestion_factor = (source_congestion + target_congestion) * 20.0  # 0-40ms dựa trên tắc nghẽn
+        
+        # Tổng độ trễ
+        total_latency = base_latency + distance_factor + congestion_factor
+        return total_latency
+        
+    def _estimate_path_latency(self, path):
+        """
+        Ước tính độ trễ của một đường dẫn đa bước
+        
+        Args:
+            path: Danh sách các shard IDs trong đường dẫn
+            
+        Returns:
+            float: Tổng độ trễ ước tính (ms)
+        """
+        if not path or len(path) < 2:
+            return 100.0  # Giá trị mặc định cao cho đường dẫn không hợp lệ
+        
+        total_latency = 0.0
+        
+        # Tính tổng độ trễ cho từng segment trong đường dẫn
+        for i in range(len(path) - 1):
+            source = path[i]
+            target = path[i+1]
+            segment_latency = self._estimate_direct_latency(source, target)
+            total_latency += segment_latency
+            
+            # Thêm độ trễ xử lý tại các nút trung gian
+            if 0 < i < len(path) - 1:  # Không tính nút nguồn và đích
+                processing_latency = 5.0  # Độ trễ xử lý cơ bản (ms)
+                
+                # Thêm phần phụ thuộc vào tắc nghẽn
+                if hasattr(self, 'congestion_tensor') and self.congestion_tensor is not None:
+                    if 0 <= source < len(self.congestion_tensor):
+                        congestion = self.congestion_tensor[source].item()
+                        processing_latency += congestion * 15.0  # 0-15ms thêm dựa trên tắc nghẽn
+                        
+                total_latency += processing_latency
+                
+        return total_latency 
+
+    def _update_statistics(self, transaction, path, latency, energy_saved):
+        """Cập nhật thống kê cho giao dịch"""
+        # Khởi tạo thống kê nếu chưa tồn tại
+        if not hasattr(self, 'stats'):
+            self.stats = {}
+            
+        if "path_selection_stats" not in self.stats:
+            self.stats["path_selection_stats"] = {
+                "total_attempts": 0,
+                "successful_optimizations": 0,
+                "direct_paths": 0,
+                "algorithm_usage": {"Dijkstra": 0},
+                "total_latency": 0,
+                "total_energy_saved": 0,
+                "cross_shard_transactions": 0,
+                "optimized_transactions": 0
+            }
+        
+        # Chuyển đổi các phần tử trong path từ tensor sang số nguyên nếu cần
+        path = [p.item() if isinstance(p, torch.Tensor) else p for p in path]
+        
+        # Cập nhật thống kê về đường đi
+        if len(path) == 2:
+            self.stats["path_selection_stats"]["direct_paths"] = self.stats["path_selection_stats"].get("direct_paths", 0) + 1
+        else:
+            self.stats["path_selection_stats"]["successful_optimizations"] = self.stats["path_selection_stats"].get("successful_optimizations", 0) + 1
+            
+        # Cập nhật thống kê về giao dịch xuyên shard
+        source_shard_id = getattr(transaction, 'source_shard', path[0])
+        target_shard_id = getattr(transaction, 'target_shard', path[-1])
+        
+        # Chuyển đổi source_shard_id và target_shard_id từ tensor sang số nguyên nếu cần
+        if isinstance(source_shard_id, torch.Tensor):
+            source_shard_id = source_shard_id.item()
+        if isinstance(target_shard_id, torch.Tensor):
+            target_shard_id = target_shard_id.item()
+        
+        if source_shard_id != target_shard_id:
+            self.stats["path_selection_stats"]["cross_shard_transactions"] = self.stats["path_selection_stats"].get("cross_shard_transactions", 0) + 1
+            if len(path) > 2:
+                self.stats["path_selection_stats"]["optimized_transactions"] = self.stats["path_selection_stats"].get("optimized_transactions", 0) + 1
+                print(f"Đã tối ưu hóa giao dịch với đường đi: {path}")
+            
+        # Cập nhật thống kê về độ trễ và năng lượng
+        self.stats["path_selection_stats"]["total_latency"] = self.stats["path_selection_stats"].get("total_latency", 0) + latency
+        self.stats["path_selection_stats"]["total_energy_saved"] = self.stats["path_selection_stats"].get("total_energy_saved", 0) + energy_saved
+        
+        # Cập nhật thống kê về thuật toán sử dụng
+        algorithm = getattr(transaction, 'algorithm_used', 'Dijkstra')
+        if "algorithm_usage" not in self.stats["path_selection_stats"]:
+            self.stats["path_selection_stats"]["algorithm_usage"] = {}
+        if algorithm not in self.stats["path_selection_stats"]["algorithm_usage"]:
+            self.stats["path_selection_stats"]["algorithm_usage"][algorithm] = 0
+        self.stats["path_selection_stats"]["algorithm_usage"][algorithm] = self.stats["path_selection_stats"]["algorithm_usage"].get(algorithm, 0) + 1
+            
+        # Cập nhật thống kê tổng thể
+        if "total_transactions" not in self.stats:
+            self.stats["total_transactions"] = 0
+        if "successful_transactions" not in self.stats:
+            self.stats["successful_transactions"] = 0
+        if "total_cross_shard" not in self.stats:
+            self.stats["total_cross_shard"] = 0
+        if "successful_cross_shard" not in self.stats:
+            self.stats["successful_cross_shard"] = 0
+            
+        self.stats["total_transactions"] = self.stats.get("total_transactions", 0) + 1
+        self.stats["successful_transactions"] = self.stats.get("successful_transactions", 0) + 1
+        
+        if source_shard_id != target_shard_id:
+            self.stats["total_cross_shard"] = self.stats.get("total_cross_shard", 0) + 1
+            self.stats["successful_cross_shard"] = self.stats.get("successful_cross_shard", 0) + 1
+            
+        # Cập nhật thống kê về hiệu suất
+        if "performance_metrics" not in self.stats:
+            self.stats["performance_metrics"] = {
+                "total_latency": 0,
+                "total_energy": 0,
+                "total_optimizations": 0
+            }
+            
+        self.stats["performance_metrics"]["total_latency"] = self.stats["performance_metrics"].get("total_latency", 0) + latency
+        self.stats["performance_metrics"]["total_energy"] = self.stats["performance_metrics"].get("total_energy", 0) + energy_saved
+        if len(path) > 2:
+            self.stats["performance_metrics"]["total_optimizations"] = self.stats["performance_metrics"].get("total_optimizations", 0) + 1
+
+    def _execute_transaction(self, transaction, source_shard_id, target_shard_id):
+        """
+        Thực hiện giao dịch giữa hai shard
+        
+        Args:
+            transaction: Giao dịch cần thực hiện
+            source_shard_id: ID shard nguồn
+            target_shard_id: ID shard đích
+            
+        Returns:
+            bool: True nếu thành công, False nếu thất bại
+        """
+        try:
+            # Kiểm tra tính hợp lệ của shard
+            if source_shard_id is None or target_shard_id is None:
+                print(f"Lỗi: source_shard_id hoặc target_shard_id là None")
+                return False
+                
+            # Lấy thông tin shard
+            source_shard = self.network.shards.get(source_shard_id)
+            target_shard = self.network.shards.get(target_shard_id)
+            
+            if not source_shard or not target_shard:
+                print(f"Lỗi: Không tìm thấy shard {source_shard_id} hoặc {target_shard_id}")
+                return False
+            
+            # Gán nguồn và đích cho giao dịch nếu chưa có
+            if not hasattr(transaction, 'source_shard') or transaction.source_shard is None:
+                transaction.source_shard = source_shard_id
+            if not hasattr(transaction, 'target_shard') or transaction.target_shard is None:
+                transaction.target_shard = target_shard_id
+                
+            # Kiểm tra số dư
+            if hasattr(transaction, 'amount') and source_shard_id == transaction.source_shard:
+                if hasattr(source_shard, 'check_balance') and callable(getattr(source_shard, 'check_balance', None)):
+                    if not source_shard.check_balance(transaction.amount):
+                        print(f"Lỗi: Shard {source_shard_id} không đủ số dư")
+                        return False
+                    
+            # Thực hiện giao dịch
+            if hasattr(transaction, 'amount'):
+                if source_shard_id == transaction.source_shard and hasattr(source_shard, 'update_balance') and callable(getattr(source_shard, 'update_balance', None)):
+                    source_shard.update_balance(-transaction.amount)
+                    print(f"Đã trừ {transaction.amount} từ shard {source_shard_id}")
+                    
+                if target_shard_id == transaction.target_shard and hasattr(target_shard, 'update_balance') and callable(getattr(target_shard, 'update_balance', None)):
+                    target_shard.update_balance(transaction.amount)
+                    print(f"Đã thêm {transaction.amount} vào shard {target_shard_id}")
+                
+            # Cập nhật trạng thái giao dịch
+            try:
+                if hasattr(transaction, 'update_status') and callable(transaction.update_status):
+                    from dqn_blockchain_sim.blockchain.transaction import TransactionStatus
+                    transaction.update_status(TransactionStatus.CONFIRMED)
+                    print(f"Đã cập nhật trạng thái giao dịch thành CONFIRMED")
+            except Exception as e:
+                print(f"Cảnh báo: Không thể cập nhật trạng thái giao dịch: {e}")
+            
+            # Cập nhật thống kê cho shard
+            if not hasattr(source_shard, 'successful_tx_count'):
+                source_shard.successful_tx_count = 0
+            source_shard.successful_tx_count += 1
+            
+            if not hasattr(target_shard, 'successful_tx_count'):
+                target_shard.successful_tx_count = 0
+            target_shard.successful_tx_count += 1
+            
+            print(f"Giao dịch từ shard {source_shard_id} đến shard {target_shard_id} thành công!")
+            return True
+            
+        except Exception as e:
+            print(f"Lỗi khi thực hiện giao dịch: {e}")
+            return False
+
+    def connect_to_network(self, network):
+        """
+        Kết nối MAD-RAPID với mạng blockchain
+        
+        Args:
+            network: Đối tượng mạng blockchain
+        """
+        print("Đang kết nối MAD-RAPID với mạng blockchain...")
+        self.network = network
+        
+        # Khởi tạo thống kê nếu chưa có
+        if not hasattr(self, 'stats'):
+            self.stats = {}
+        if 'path_selection_stats' not in self.stats:
+            self.stats['path_selection_stats'] = {
+                'total_attempts': 0,
+                'successful_optimizations': 0,
+                'direct_paths': 0,
+                'algorithm_usage': {'Dijkstra': 0},
+                'total_latency': 0,
+                'total_energy_saved': 0
+            }
+        if 'cross_shard_tx_stats' not in self.stats:
+            self.stats['cross_shard_tx_stats'] = {
+                'total_attempts': 0,
+                'successful': 0,
+                'failed': 0,
+                'energy_saved': 0
+            }
+            
+        # Lấy số lượng shard
+        num_shards = len(self.network.shards)
+        print(f"Số shard trong MAD-RAPID: {num_shards}")
+        
+        # Khởi tạo ma trận độ trễ
+        self.latency_matrix = torch.rand((num_shards, num_shards)) * 100  # Độ trễ ngẫu nhiên từ 0-100ms
+        # Đặt độ trễ từ một shard đến chính nó là 0
+        for i in range(num_shards):
+            self.latency_matrix[i, i] = 0
+            
+        # Khởi tạo tensor tắc nghẽn
+        self.congestion_tensor = torch.zeros((num_shards, num_shards))
+        
+        # Cập nhật tensor tắc nghẽn ban đầu
+        for i in range(num_shards):
+            congestion = self._predict_congestion(i)
+            for j in range(num_shards):
+                if i != j:
+                    self.congestion_tensor[i, j] = congestion
+        
+        # Khởi tạo shard embeddings
+        print("Đang khởi tạo shard_embeddings...")
+        self.shard_embeddings = torch.rand((num_shards, 10))  # Mỗi shard có một embedding 10 chiều
+        
+        print("Đã kết nối MAD-RAPID với mạng blockchain thành công!")
+
+    def _calculate_energy_cost(self, source_shard_id, target_shard_id):
+        """
+        Tính toán chi phí năng lượng cho việc truyền giao dịch giữa hai shard
+        
+        Args:
+            source_shard_id: ID shard nguồn
+            target_shard_id: ID shard đích
+            
+        Returns:
+            float: Chi phí năng lượng ước tính
+        """
+        try:
+            # Kiểm tra tính hợp lệ của IDs
+            if source_shard_id is None or target_shard_id is None:
+                return 100.0  # Giá trị mặc định cao
+                
+            # Nếu nguồn và đích giống nhau, chi phí thấp
+            if source_shard_id == target_shard_id:
+                return 10.0
+                
+            # Đảm bảo latency_matrix đã được khởi tạo
+            if not hasattr(self, 'latency_matrix') or self.latency_matrix is None:
+                print("Khởi tạo ma trận độ trễ trong _calculate_energy_cost")
+                num_shards = len(self.network.shards)
+                self.latency_matrix = torch.rand((num_shards, num_shards)) * 100
+                for i in range(num_shards):
+                    self.latency_matrix[i, i] = 0
+                    
+            # Đảm bảo congestion_tensor đã được khởi tạo
+            if not hasattr(self, 'congestion_tensor') or self.congestion_tensor is None:
+                print("Khởi tạo tensor tắc nghẽn trong _calculate_energy_cost")
+                num_shards = len(self.network.shards)
+                self.congestion_tensor = torch.zeros((num_shards, num_shards))
+                
+            # Kiểm tra tính hợp lệ của chỉ số
+            num_shards = self.latency_matrix.shape[0]
+            
+            # Chuyển đổi tensor thành số nguyên nếu cần
+            if isinstance(source_shard_id, torch.Tensor):
+                source_shard_id = source_shard_id.item()
+            if isinstance(target_shard_id, torch.Tensor):
+                target_shard_id = target_shard_id.item()
+                
+            if source_shard_id >= num_shards or target_shard_id >= num_shards:
+                print(f"Lỗi: Chỉ số shard không hợp lệ trong _calculate_energy_cost: {source_shard_id}, {target_shard_id}, num_shards={num_shards}")
+                return 100.0
+                
+            # Tính toán chi phí dựa trên độ trễ và tắc nghẽn
+            base_cost = 50.0  # Chi phí cơ bản
+            
+            # Thêm chi phí dựa trên độ trễ
+            latency_cost = 0.0
+            try:
+                if source_shard_id < self.latency_matrix.shape[0] and target_shard_id < self.latency_matrix.shape[1]:
+                    latency_cost = self.latency_matrix[source_shard_id, target_shard_id].item() * 0.5
+            except Exception as e:
+                print(f"Lỗi khi tính toán chi phí độ trễ: {e}")
+                latency_cost = 50.0  # Giá trị mặc định nếu có lỗi
+                
+            # Thêm chi phí dựa trên tắc nghẽn
+            congestion_cost = 0.0
+            try:
+                if source_shard_id < self.congestion_tensor.shape[0] and target_shard_id < self.congestion_tensor.shape[1]:
+                    congestion_cost = self.congestion_tensor[source_shard_id, target_shard_id].item() * 100.0
+            except Exception as e:
+                print(f"Lỗi khi tính toán chi phí tắc nghẽn: {e}")
+                
+            # Tổng chi phí
+            total_cost = base_cost + latency_cost + congestion_cost
+            
+            # Thêm yếu tố ngẫu nhiên nhỏ để tránh đồng nhất
+            random_factor = random.uniform(0.9, 1.1)
+            total_cost *= random_factor
+            
+            return total_cost
+            
+        except Exception as e:
+            print(f"Lỗi khi tính toán chi phí năng lượng: {e}")
+            return 100.0  # Giá trị mặc định trong trường hợp lỗi
