@@ -1,20 +1,20 @@
-# QTrust: Deep Reinforcement Learning cho Blockchain Sharding
+# BlockMatrix: Deep Reinforcement Learning cho Blockchain Sharding
 
 <div align="center">
-  <img src="models/training_rewards.png" alt="QTrust Performance" width="600">
-  <p><em>Hiệu suất huấn luyện của Deep Q-Network Agent trong QTrust</em></p>
+  <img src="models/training_rewards.png" alt="BlockMatrix Training Rewards" width="600">
+  <p><em>Hiệu suất học của mô hình DQN trong BlockMatrix</em></p>
 </div>
 
-[![GitHub license](https://img.shields.io/github/license/yourusername/qtrust)](https://github.com/yourusername/qtrust/blob/main/LICENSE)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![GitHub issues](https://img.shields.io/github/issues/yourusername/qtrust)](https://github.com/yourusername/qtrust/issues)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://makeapullrequest.com)
+[![GitHub license](https://img.shields.io/github/license/fuondai/QTrust)](https://github.com/fuondai/QTrust/blob/main/LICENSE.md)
+[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
+[![GitHub issues](https://img.shields.io/github/issues/fuondai/QTrust)](https://github.com/fuondai/QTrust/issues)
+[![GitHub pull requests](https://img.shields.io/github/issues-pr/fuondai/QTrust)](https://github.com/fuondai/QTrust/pulls)
 
-QTrust là một hệ thống tiên tiến tối ưu hóa sharding trong mạng blockchain sử dụng Deep Reinforcement Learning (DRL). Hệ thống tích hợp nhiều thành phần tiên tiến để cải thiện hiệu suất, khả năng mở rộng và bảo mật của mạng blockchain phân mảnh.
+**BlockMatrix** là một giải pháp blockchain sharding tiên tiến kết hợp học tăng cường sâu (Deep Reinforcement Learning - DRL) để tối ưu hóa hiệu suất và bảo mật trong hệ thống blockchain. Dự án nhắm tới việc giải quyết các thách thức cốt lõi của blockchain bao gồm khả năng mở rộng, tiêu thụ năng lượng, và bảo mật.
 
 ## 📋 Tổng quan
 
-QTrust là một dự án nghiên cứu và mô phỏng về việc sử dụng học tăng cường (Reinforcement Learning) để tối ưu hóa hiệu suất của mạng blockchain phân mảnh. Hệ thống tập trung vào việc giải quyết các thách thức chính trong blockchain sharding:
+BlockMatrix là một dự án nghiên cứu và mô phỏng về việc sử dụng học tăng cường (Reinforcement Learning) để tối ưu hóa hiệu suất của mạng blockchain phân mảnh. Hệ thống tập trung vào việc giải quyết các thách thức chính trong blockchain sharding:
 
 - Cân bằng tải giữa các shard
 - Tối ưu hóa giao dịch xuyên shard
@@ -22,8 +22,8 @@ QTrust là một dự án nghiên cứu và mô phỏng về việc sử dụng 
 - Đảm bảo tính nhất quán và bảo mật của dữ liệu
 
 <div align="center">
-  <img src="results_comparison/attack_comparison/attack_radar_comparison_20250323_064022.png" alt="QTrust Attack Resistance" width="600">
-  <p><em>Khả năng chống tấn công của QTrust so với các phương pháp khác</em></p>
+  <img src="results_comparison/attack_comparison/attack_radar_comparison_20250323_064022.png" alt="BlockMatrix Attack Resistance" width="600">
+  <p><em>Khả năng chống tấn công của BlockMatrix so với các phương pháp khác</em></p>
 </div>
 
 ## 🚀 Tính năng nổi bật
@@ -63,7 +63,7 @@ QTrust là một dự án nghiên cứu và mô phỏng về việc sử dụng 
 
 ## 📊 Kết quả nghiên cứu
 
-QTrust đã được kiểm nghiệm qua nhiều mô phỏng:
+BlockMatrix đã được kiểm nghiệm qua nhiều mô phỏng:
 
 ### Hiệu suất chống tấn công
 
@@ -85,8 +85,8 @@ QTrust đã được kiểm nghiệm qua nhiều mô phỏng:
 | Rất lớn | 1,280 | 31.9 | 50.0 |
 
 <div align="center">
-  <img src="results_comparison/scale_comparison/scaling_efficiency_20250323_064105.png" alt="QTrust Scaling Efficiency" width="600">
-  <p><em>Hiệu quả mở rộng của QTrust khi tăng quy mô hệ thống</em></p>
+  <img src="results_comparison/scale_comparison/scaling_efficiency_20250323_064105.png" alt="BlockMatrix Scaling Efficiency" width="600">
+  <p><em>Hiệu quả mở rộng của BlockMatrix khi tăng quy mô hệ thống</em></p>
 </div>
 
 ## 💻 Yêu cầu hệ thống
@@ -111,8 +111,8 @@ python3 setup_environment.py
 
 ```bash
 # Sao chép repository
-git clone https://github.com/yourusername/qtrust.git
-cd qtrust
+git clone https://github.com/fuondai/QTrust.git
+cd QTrust
 
 # Tạo môi trường ảo (tùy chọn nhưng khuyến nghị)
 python -m venv venv

@@ -1,4 +1,8 @@
-# QTrust: Tài liệu API và Hướng dẫn
+# BlockMatrix API Documentation
+
+## Tổng quan
+
+BlockMatrix là một framework blockchain sharding sử dụng Deep Reinforcement Learning (DRL) để tối ưu hóa hiệu suất và bảo mật. Tài liệu này cung cấp thông tin chi tiết về API và cách sử dụng các module của hệ thống.
 
 <div align="center">
   <img src="models/training_metrics.png" alt="QTrust Performance Metrics" width="600">

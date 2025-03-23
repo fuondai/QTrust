@@ -1,4 +1,4 @@
-# BÁO CÁO DỰ ÁN QTRUST
+# BÁO CÁO DỰ ÁN BLOCKMATRIX
 ## Giải pháp Blockchain Sharding Tối ưu bằng học tăng cường sâu
 
 **Ngày: 23/03/2025**  
@@ -19,7 +19,7 @@
 
 ## Tổng quan dự án
 
-QTrust là một giải pháp blockchain sharding tiên tiến kết hợp học tăng cường sâu (Deep Reinforcement Learning - DRL) để tối ưu hóa hiệu suất và bảo mật trong hệ thống blockchain. Dự án này nhằm giải quyết các thách thức cốt lõi của blockchain như khả năng mở rộng, tiêu thụ năng lượng và bảo mật bằng cách áp dụng thuật toán Q-learning để tối ưu hóa quá trình định tuyến giao dịch và giao thức đồng thuận thích ứng.
+BlockMatrix là một giải pháp blockchain sharding tiên tiến kết hợp học tăng cường sâu (Deep Reinforcement Learning - DRL) để tối ưu hóa hiệu suất và bảo mật trong hệ thống blockchain. Dự án này nhằm giải quyết các thách thức cốt lõi của blockchain như khả năng mở rộng, tiêu thụ năng lượng và bảo mật bằng cách áp dụng thuật toán Q-learning để tối ưu hóa quá trình định tuyến giao dịch và giao thức đồng thuận thích ứng.
 
 Các đóng góp chính của dự án bao gồm:
 - Phát triển mô hình DQN (Deep Q-Network) để tối ưu hóa định tuyến giao dịch giữa các shard
@@ -29,13 +29,13 @@ Các đóng góp chính của dự án bao gồm:
 
 ## Phương pháp nghiên cứu
 
-Nghiên cứu này sử dụng phương pháp mô phỏng để đánh giá hiệu suất của QTrust trong các điều kiện khác nhau. Chúng tôi đã phát triển một nền tảng mô phỏng toàn diện cho phép:
+Nghiên cứu này sử dụng phương pháp mô phỏng để đánh giá hiệu suất của BlockMatrix trong các điều kiện khác nhau. Chúng tôi đã phát triển một nền tảng mô phỏng toàn diện cho phép:
 
 1. **So sánh các cấu hình khác nhau:**
    - Basic: Phương pháp sharding cơ bản
    - Adaptive Consensus Only: Chỉ sử dụng giao thức đồng thuận thích ứng
    - DQN Only: Chỉ sử dụng định tuyến DQN
-   - QTrust Full: Kết hợp cả hai công nghệ
+   - BlockMatrix Full: Kết hợp cả hai công nghệ
 
 2. **Mô phỏng các loại tấn công:**
    - Tấn công 51%
@@ -56,7 +56,7 @@ Các thông số đo lường chính bao gồm:
 
 ## Cấu trúc dự án
 
-Dự án QTrust được tổ chức với cấu trúc module rõ ràng:
+Dự án BlockMatrix được tổ chức với cấu trúc module rõ ràng:
 
 - **core/**: Chứa các thành phần cốt lõi của hệ thống blockchain
   - `blockchain.py`: Cài đặt chuỗi khối cơ bản
@@ -83,26 +83,26 @@ Dự án QTrust được tổ chức với cấu trúc module rõ ràng:
 
 ### So sánh cấu hình
 
-Bảng 1: So sánh hiệu suất giữa các cấu hình QTrust
+Bảng 1: So sánh hiệu suất giữa các cấu hình BlockMatrix
 
 | Cấu hình              | Throughput | Độ trễ (ms) | Năng lượng | Bảo mật | Xuyên shard |
 |-----------------------|------------|-------------|------------|---------|-------------|
 | Basic                 | 29.09      | 54.33       | 39.19      | 0.80    | 0.31        |
 | Adaptive Consensus Only| 29.09      | 48.80       | 35.01      | 0.74    | 0.30        |
 | DQN Only              | 29.49      | 35.57       | 39.12      | 0.80    | 0.30        |
-| QTrust Full           | 29.37      | 32.15       | 35.00      | 0.73    | 0.30        |
+| BlockMatrix Full      | 29.37      | 32.15       | 35.00      | 0.73    | 0.30        |
 
 Kết quả so sánh cho thấy:
 - Cấu hình 'DQN Only' cho throughput cao nhất (29.49 tx/s)
-- Cấu hình 'QTrust Full' cho độ trễ thấp nhất (32.15 ms)
-- Cấu hình 'QTrust Full' tiêu thụ ít năng lượng nhất (35.00)
+- Cấu hình 'BlockMatrix Full' cho độ trễ thấp nhất (32.15 ms)
+- Cấu hình 'BlockMatrix Full' tiêu thụ ít năng lượng nhất (35.00)
 - Cấu hình 'Basic' cho bảo mật cao nhất (0.80)
 
-Cấu hình 'QTrust Full' mang lại hiệu suất tổng thể tốt nhất với phần thưởng trung bình cao hơn cấu hình cơ bản 4.76 lần.
+Cấu hình 'BlockMatrix Full' mang lại hiệu suất tổng thể tốt nhất với phần thưởng trung bình cao hơn cấu hình cơ bản 4.76 lần.
 
 ### Khả năng chống tấn công
 
-Bảng 2: Hiệu suất QTrust dưới các loại tấn công khác nhau
+Bảng 2: Hiệu suất BlockMatrix dưới các loại tấn công khác nhau
 
 | Loại tấn công   | Throughput | Độ trễ (ms) | Năng lượng | Bảo mật | Xuyên shard |
 |-----------------|------------|-------------|------------|---------|-------------|
@@ -134,7 +134,7 @@ Bảng 2: Hiệu suất QTrust dưới các loại tấn công khác nhau
   - Độ trễ: -1.52%
   - Bảo mật: -100.00%
 
-Kết quả này cho thấy QTrust duy trì throughput và độ trễ tốt ngay cả khi có 30% node độc hại trong mạng lưới.
+Kết quả này cho thấy BlockMatrix duy trì throughput và độ trễ tốt ngay cả khi có 30% node độc hại trong mạng lưới.
 
 ### Khả năng mở rộng
 
@@ -168,29 +168,29 @@ Số liệu thống kê:
 
 ### Hiệu suất tổng thể
 
-QTrust đạt được sự cân bằng tốt giữa hiệu suất và bảo mật. Cấu hình QTrust Full đã cải thiện đáng kể độ trễ và tiêu thụ năng lượng so với cấu hình Basic, đồng thời duy trì throughput ổn định. Cụ thể:
+BlockMatrix đạt được sự cân bằng tốt giữa hiệu suất và bảo mật. Cấu hình BlockMatrix Full đã cải thiện đáng kể độ trễ và tiêu thụ năng lượng so với cấu hình cơ bản, đồng thời duy trì throughput ổn định. Cụ thể:
 
 1. **Cải thiện độ trễ**: Giảm 40% độ trễ so với cấu hình cơ bản, từ 54.33ms xuống còn 32.15ms.
    
 2. **Tối ưu hóa năng lượng**: Tiêu thụ năng lượng giảm 10.7% so với cấu hình cơ bản.
 
-3. **Phần thưởng tổng thể**: Cấu hình QTrust Full đạt phần thưởng cao hơn 4.76 lần so với cấu hình cơ bản.
+3. **Phần thưởng tổng thể**: Cấu hình BlockMatrix Full đạt phần thưởng cao hơn 4.76 lần so với cấu hình cơ bản.
 
 ### Khả năng chống tấn công
 
-QTrust thể hiện khả năng chống chịu tốt trước các loại tấn công blockchain phổ biến. Đặc biệt:
+BlockMatrix thể hiện khả năng chống chịu tốt trước các loại tấn công blockchain phổ biến. Đặc biệt:
 
 1. **Tấn công 51%**: Giảm ảnh hưởng đến throughput xuống còn -1.5%, trong khi độ trễ chỉ tăng 1.4%.
    
 2. **Tấn công Sybil và Eclipse**: Ảnh hưởng không đáng kể đến throughput và độ trễ.
 
-3. **Tấn công tổng hợp (mixed)**: Ngay cả khi đối mặt với nhiều loại tấn công cùng lúc, QTrust vẫn duy trì hiệu suất ổn định với throughput giảm chỉ 0.01% và độ trễ thậm chí còn giảm 1.52%.
+3. **Tấn công tổng hợp (mixed)**: Ngay cả khi đối mặt với nhiều loại tấn công cùng lúc, BlockMatrix vẫn duy trì hiệu suất ổn định với throughput giảm chỉ 0.01% và độ trễ thậm chí còn giảm 1.52%.
 
-Mặc dù điểm bảo mật giảm đáng kể trong các tình huống tấn công, QTrust vẫn duy trì hiệu suất vận hành tốt, cho thấy khả năng phục hồi tuyệt vời của hệ thống.
+Mặc dù điểm bảo mật giảm đáng kể trong các tình huống tấn công, BlockMatrix vẫn duy trì hiệu suất vận hành tốt, cho thấy khả năng phục hồi tuyệt vời của hệ thống.
 
 ### Khả năng mở rộng
 
-Kết quả mô phỏng quy mô lớn cho thấy khả năng mở rộng ấn tượng của QTrust:
+Kết quả mô phỏng quy mô lớn cho thấy khả năng mở rộng ấn tượng của BlockMatrix:
 
 1. **Thông lượng thực tế**: 925.17 tx/s trên mạng với 3200 node, vượt xa nhiều giải pháp blockchain hiện tại.
    
@@ -204,15 +204,15 @@ Kết quả mô phỏng quy mô lớn cho thấy khả năng mở rộng ấn t�
 
 ### Kết luận
 
-Dự án QTrust đã thành công trong việc phát triển và đánh giá một giải pháp blockchain sharding tiên tiến sử dụng học tăng cường sâu. Các kết quả mô phỏng khẳng định rằng:
+Dự án BlockMatrix đã thành công trong việc phát triển và đánh giá một giải pháp blockchain sharding tiên tiến sử dụng học tăng cường sâu. Các kết quả mô phỏng khẳng định rằng:
 
 1. Sự kết hợp giữa giao thức đồng thuận thích ứng và định tuyến dựa trên DQN mang lại hiệu suất vượt trội so với các phương pháp truyền thống.
 
-2. QTrust duy trì khả năng chống chịu tốt trước nhiều loại tấn công khác nhau, đặc biệt là trong việc duy trì throughput và độ trễ ổn định.
+2. BlockMatrix duy trì khả năng chống chịu tốt trước nhiều loại tấn công khác nhau, đặc biệt là trong việc duy trì throughput và độ trễ ổn định.
 
 3. Giải pháp có khả năng mở rộng tốt, đạt thông lượng cao và độ trễ thấp ngay cả khi mạng lưới phát triển lên tới hàng nghìn node.
 
-4. QTrust thể hiện tiềm năng lớn cho các ứng dụng blockchain yêu cầu khả năng mở rộng cao trong khi vẫn duy trì bảo mật mạnh mẽ.
+4. BlockMatrix thể hiện tiềm năng lớn cho các ứng dụng blockchain yêu cầu khả năng mở rộng cao trong khi vẫn duy trì bảo mật mạnh mẽ.
 
 ### Hướng phát triển
 
