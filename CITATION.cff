@@ -1,0 +1,45 @@
+cff-version: 1.2.0
+message: "Nếu bạn sử dụng phần mềm này trong nghiên cứu, vui lòng trích dẫn nó như dưới đây."
+title: "QTrust: Deep Reinforcement Learning cho Blockchain Sharding"
+authors:
+  - family-names: "QTrust Team"
+version: 1.0.0
+date-released: 2025-03-23
+url: "https://github.com/username/qtrust"
+repository-code: "https://github.com/username/qtrust"
+license: MIT
+keywords:
+  - blockchain
+  - sharding
+  - deep-reinforcement-learning
+  - consensus
+  - federated-learning
+  - trust-assessment
+abstract: >
+  QTrust là một framework mô phỏng và tối ưu hóa cho blockchain sharding sử dụng kỹ thuật
+  Deep Reinforcement Learning. Hệ thống kết hợp adaptive consensus, mạng định tuyến 
+  thông minh MAD-RAPID, cơ chế đánh giá tin cậy phân cấp (HTDCM), và tích hợp
+  Federated Learning để tối ưu hóa toàn diện hiệu suất mạng blockchain. QTrust cải thiện 
+  đáng kể hiệu suất so với các phương pháp truyền thống, đặc biệt là trong khả năng chống 
+  tấn công, độ trễ, và khả năng mở rộng.
+references:
+  - type: article
+    authors:
+      - family-names: "Nakamoto"
+        given-names: "Satoshi"
+    title: "Bitcoin: A Peer-to-Peer Electronic Cash System"
+    year: 2008
+  - type: article
+    authors:
+      - family-names: "Buterin"
+        given-names: "Vitalik"
+    title: "Ethereum: A Next-Generation Smart Contract and Decentralized Application Platform"
+    year: 2014
+  - type: article
+    authors:
+      - family-names: "Castro"
+        given-names: "Miguel"
+      - family-names: "Liskov"
+        given-names: "Barbara"  
+    title: "Practical Byzantine Fault Tolerance"
+    year: 1999 

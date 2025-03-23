@@ -1,0 +1,88 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs and results
+*.log
+results/*.txt
+results_attack/*.txt
+results_extended/*.txt
+results_large/*.txt
+results_comparison/*.txt
+qtrust_results/*.txt
+qtrust_scale_results/*.txt
+*.csv
+*.tmp
+
+# Keep model files
+!results/*.pth
+!models/*.pth
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# Temporary files
+*.bak
+*.tmp
+*.temp
+.temp/
+.tmp/
+tmp/
+
+# Generated charts
+charts/*.png
+charts/*.jpg
+charts/*.pdf
+!charts/.gitkeep
+
+# Documentation build
+docs/_build/
+_docs_html/
+
+# Local configuration
+config.local.yaml
+.env.local 
